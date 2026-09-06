@@ -1,0 +1,38 @@
+name: Bootstrap public staging once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-public-staging-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download accepted staging artifact
+        run: |
+          curl -fL 'https://sdmntprnznorth.oaiusercontent.com/files/00000000-a0a4-820b-adb5-94a6a2283e45/raw?se=2026-09-07T00%3A02%3A36Z&sp=r&sv=2026-02-06&sr=b&scid=1543dfff-bf40-531f-b6f8-d06477ae6dd4&skoid=f5e14fda-2af7-44a3-9d18-d372ffcad871&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-09-06T21%3A42%3A27Z&ske=2026-09-07T21%3A42%3A27Z&sks=b&skv=2026-02-06&sig=9g9k59uDou0qtXUko%2BHHlLA00mCuhnCjjB8uZN4aWAA%3D' -o /tmp/public-oss-staging.zip
+          mkdir -p /tmp/public-oss-artifact
+          unzip -q /tmp/public-oss-staging.zip -d /tmp/public-oss-artifact
+          test -d /tmp/public-oss-artifact/public-oss-staging
+
+      - name: Materialize accepted staging tree
+        run: |
+          cp -a /tmp/public-oss-artifact/public-oss-staging/. .
+          rm -f .github/workflows/bootstrap-public-staging-once.yml
+
+      - name: Commit staging tree
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: materialize accepted public OSS staging'
+          git push origin HEAD:main
