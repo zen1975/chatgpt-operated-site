@@ -2,12 +2,12 @@ name: Bootstrap standalone OSS candidate once
 
 on:
   push:
-    branches: [dev/standalone-baseline-20260907]
+    branches: [main]
     paths:
       - '.github/workflows/bootstrap-standalone-once.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bootstrap:
@@ -30,10 +30,9 @@ jobs:
       - name: Standalone build
         run: npm run build
 
-      - name: Commit generated lockfile to isolated branch
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package-lock.json
-          git commit -m 'build: add standalone package lock'
-          git push origin HEAD:dev/standalone-baseline-20260907
+      - name: Export generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-package-lock
+          path: package-lock.json
+          if-no-files-found: error
