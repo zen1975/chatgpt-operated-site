@@ -2,8 +2,14 @@
   "schemaVersion": 1,
   "profileName": "default-corporate-image-profile",
   "formats": {
-    "preferred": ["webp", "avif"],
-    "fallback": ["jpg", "png"]
+    "preferred": [
+      "webp",
+      "avif"
+    ],
+    "fallback": [
+      "jpg",
+      "png"
+    ]
   },
   "slots": {
     "article.featured": {
@@ -71,8 +77,8 @@
     "defaultTextPolicy": "prohibited"
   },
   "notes": [
-    "各案件では実際のcomponent / template仕様に合わせてslot値を上書きする",
-    "このdefault値を実サイトの絶対仕様として扱わない",
-    "既存componentに異なるratio/sizeがある場合は実装側仕様を優先してprofileを更新する"
+    "Override these slot values to match the actual component/template specification of each installation.",
+    "Do not treat these defaults as the absolute specification of a real site.",
+    "When an existing component uses a different ratio or size, the implementation wins: update this profile to match it."
   ]
 }

@@ -8,7 +8,7 @@ const props = (section.props || {}) as Record<string, any>;
 const asset = (path: string) => section.assets[path]?.path;
 const assetAlt = (_path: string, fallback: string) => props.alt || fallback;
 ---
-{section.issue ? <div class="page-module-unsupported" role="status" data-renderer-issue={section.issue}>このセクションは現在表示できません。</div> : section.sectionType === 'hero' ? (
+{section.issue ? <div class="page-module-unsupported" role="status" data-renderer-issue={section.issue}>This section cannot be displayed.</div> : section.sectionType === 'hero' ? (
   <section class={`page-module page-module--hero page-module--hero-${section.variant}`} aria-labelledby={`page-section-${section.id}`}>
     <div class="page-module__inner"><div>{props.eyebrow && <p class="eyebrow">{props.eyebrow}</p>}<h1 id={`page-section-${section.id}`}>{props.title}</h1>{props.lead && <p class="page-module__lead">{props.lead}</p>}<div class="hero-actions">{props.primaryCta && <a class="button button--primary" href={props.primaryCta.href}>{props.primaryCta.label}</a>}{props.secondaryCta && <a class="button button--ghost" href={props.secondaryCta.href}>{props.secondaryCta.label}</a>}</div></div>{asset('assetId') && <img src={asset('assetId')} alt={assetAlt('assetId', props.title)} />}</div>
   </section>
@@ -34,4 +34,4 @@ const assetAlt = (_path: string, fallback: string) => props.alt || fallback;
   <section class={`page-module page-module--cta page-module--${section.variant}`}><div class="page-module__inner"><p class="eyebrow">{props.eyebrow}</p><h2>{props.title}</h2>{props.body && <p>{props.body}</p>}<div class="hero-actions"><a class="button button--primary" href={props.primaryCta.href}>{props.primaryCta.label}</a>{props.secondaryCta && <a class="button button--ghost" href={props.secondaryCta.href}>{props.secondaryCta.label}</a>}</div></div></section>
 ) : section.sectionType === 'reusable' ? (
   <section class={`page-module page-module--reusable page-module--${section.variant}`}><div class="page-module__inner"><ArticleRenderer blocks={section.reusableBlocks as any} /></div></section>
-) : <div class="page-module-unsupported" role="status" data-renderer-issue={`UNKNOWN_PAGE_MODULE:${section.sectionType}`}>このセクションは現在表示できません。</div>}
+) : <div class="page-module-unsupported" role="status" data-renderer-issue={`UNKNOWN_PAGE_MODULE:${section.sectionType}`}>This section cannot be displayed.</div>}

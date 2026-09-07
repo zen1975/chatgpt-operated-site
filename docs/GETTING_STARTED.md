@@ -17,8 +17,15 @@ The included Example Company site is intentionally simple. Treat it like a neutr
 
 ```bash
 npm ci
-npm run build
+npm run verify
 ```
+
+`npm run verify` runs the production build and the contract checks. The contract
+checks are what make a clean-environment install trustworthy: they validate the
+shipped command examples against the current schemas, apply the migrations to a
+brand-new database, confirm the committed Cloudflare identifiers are still
+placeholders, and scan the tracked files for credential-shaped content. A green
+build alone does not prove any of that.
 
 The committed `package-lock.json` is the install contract. Do not regenerate dependencies as part of ordinary CI or deployment.
 
@@ -33,6 +40,10 @@ Start with:
 - `wrangler.jsonc`
 
 Replace placeholder values with installation-specific configuration. Keep secrets in the appropriate Cloudflare/GitHub secret stores rather than source control.
+
+`docs/CONFIGURATION.md` is the complete reference for every binding, plaintext
+variable, and secret the Worker reads, and for which ingress endpoints exist and
+how each one authenticates.
 
 ## Replace the reference website
 

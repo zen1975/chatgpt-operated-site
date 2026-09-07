@@ -16,11 +16,11 @@ const resolvedBlocks = await Promise.all(expandedBlocks.map(async (block) => blo
   if (block.type === 'ordered_list') return <ol>{block.items.map(i => <li>{i}</li>)}</ol>;
   if (block.type === 'quote') return <blockquote>{block.content}</blockquote>;
   if (block.type === 'image' && asset) return <figure><img src={asset.path} alt={block.alt || ''} loading="lazy" /></figure>;
-  if (block.type === 'image') return <div class="asset-fallback" role="img" aria-label="画像を表示できません" data-asset-id={block.assetId}>画像を表示できません</div>;
+  if (block.type === 'image') return <div class="asset-fallback" role="img" aria-label="Image unavailable" data-asset-id={block.assetId}>Image unavailable</div>;
   if (block.type === 'table') return <div class="article-table"><table><thead><tr>{block.headers.map(header => <th>{header}</th>)}</tr></thead><tbody>{block.rows.map(row => <tr>{row.map(cell => <td>{cell}</td>)}</tr>)}</tbody></table></div>;
   if (block.type === 'separator') return <hr />;
-  if (block.type === 'reusable') { console.warn(`[renderer-warning] Unresolved reusable block: ${block.ref}`); return <div class="article-unsupported" data-block-type="reusable">再利用コンテンツを表示できません。</div>; }
+  if (block.type === 'reusable') { console.warn(`[renderer-warning] Unresolved reusable block: ${block.ref}`); return <div class="article-unsupported" data-block-type="reusable">Reusable content is unavailable.</div>; }
   const unsupportedBlock = block as unknown as { type: string };
-  return <div class="article-unsupported" data-block-type={unsupportedBlock.type}>このコンテンツブロックは現在表示できません。</div>;
+  return <div class="article-unsupported" data-block-type={unsupportedBlock.type}>This content block cannot be displayed.</div>;
 })}
 </div>
