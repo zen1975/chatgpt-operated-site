@@ -7,18 +7,38 @@ import { getNewsWithMedia, getArticlesWithMedia } from '@/lib/content';
 const news = await getNewsWithMedia(3);
 const articles = await getArticlesWithMedia(3);
 ---
-<BaseLayout title="ChatGPT Website Starter" description="Open-source infrastructure for websites clients can update from ChatGPT.">
+<BaseLayout title="Example Company | Digital Services" description="A neutral English corporate website included as the reference target site for ChatGPT Operated Site.">
   <Fragment slot="global-top"><TimedContentSlot placement="global_top" /></Fragment>
   <main>
-    <section class="hero"><div class="shell">
-      <h1>Build websites your clients can update from ChatGPT.</h1>
-      <p>ChatGPT is the interface. GitHub Commands, Cloudflare Workers, D1 and R2 form the controlled infrastructure underneath.</p>
+    <section class="hero">
+      <div class="shell hero__grid">
+        <div>
+          <p class="eyebrow">Digital services for growing organizations</p>
+          <h1>Building better digital experiences.</h1>
+          <p>We help organizations create clear, reliable, and useful digital services. This website contains neutral mock content so developers can replace it with a real client design.</p>
+          <div class="actions"><a class="button" href="/services/">Our services</a><a class="text-link" href="/contact/">Contact us →</a></div>
+        </div>
+        <img class="hero__image" src="/assets/mock-workspace.svg" alt="Abstract mock workspace illustration" />
+      </div>
+    </section>
+
+    <section class="section"><div class="shell">
+      <p class="eyebrow">What we do</p><h2>Services</h2>
+      <div class="feature-grid">
+        <article><h3>Strategy</h3><p>Practical planning that connects business goals with a clear digital roadmap.</p></article>
+        <article><h3>Design</h3><p>Accessible, maintainable interfaces designed around real customer needs.</p></article>
+        <article><h3>Development</h3><p>Reliable web implementation with a focus on performance and long-term operation.</p></article>
+      </div>
     </div></section>
-    <section class="section"><div class="shell"><h2>Latest news</h2><div class="card-grid">
-      {news.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/news/${item.slug}/`} meta={item.published_at?.slice(0,10)} />)}
+
+    <section class="section section--surface"><div class="shell"><p class="eyebrow">Updates</p><h2>Latest news</h2><div class="card-grid">
+      {news.length > 0 ? news.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/news/${item.slug}/`} meta={item.published_at?.slice(0,10)} />) : <p class="empty-state">News published through the operation layer will appear here.</p>}
     </div></div></section>
-    <section class="section"><div class="shell"><h2>Latest articles</h2><div class="card-grid">
-      {articles.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/column/${item.slug}/`} image={item.media.thumbnail?.path} meta={item.published_at?.slice(0,10)} />)}
+
+    <section class="section"><div class="shell"><p class="eyebrow">Ideas</p><h2>Insights</h2><div class="card-grid">
+      {articles.length > 0 ? articles.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/column/${item.slug}/`} image={item.media.thumbnail?.path} meta={item.published_at?.slice(0,10)} />) : <p class="empty-state">Articles published through the operation layer will appear here.</p>}
     </div></div></section>
+
+    <section class="section"><div class="shell callout"><div><p class="eyebrow">Start a conversation</p><h2>Have a project in mind?</h2><p>Tell us what you are trying to improve and we will help you find a practical next step.</p></div><a class="button" href="/contact/">Get in touch</a></div></section>
   </main>
 </BaseLayout>
