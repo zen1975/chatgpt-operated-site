@@ -110,16 +110,10 @@ async function installationSiteId() {
 }
 
 /**
- * Whether a command is image-bearing, in the sense the operating contract uses.
- *
- * This is a property of the *command*, not of which form its asset takes.
- * AGENTS.md and DAILY_OPERATION.md require `context.requiresAssetIntake: true`
- * on image-bearing operations, and a compliant command that names an existing
- * canonical assetId is still one of those. Treating "is this image-bearing?"
- * and "must provider readiness run?" as one boolean rejected every such
- * command before it could reach preflight.
+ * Commands whose whole purpose is to place an asset. Image-bearing by
+ * definition, whatever form the asset takes.
  */
-const IMAGE_BEARING_COMMANDS = new Set([
+const ASSET_COMMANDS = new Set([
   'import_wordpress_asset',
   'attach_asset',
   'replace_asset',
@@ -129,7 +123,85 @@ const IMAGE_BEARING_COMMANDS = new Set([
   'replace_page_section_item_asset'
 ]);
 
-export const isImageBearingCommand = (command) => IMAGE_BEARING_COMMANDS.has(command);
+const loadPageRegistry = () => loadServerModule('src/server/page-composition/registry.ts');
+const loadPageSchemas = () => loadServerModule('src/server/page-composition/schemas.ts');
+
+/**
+ * Asset slots a page module declares for its items, e.g. `items[].assetId`.
+ *
+ * Derived from the module registry rather than listed here, so a module that
+ * gains an item asset slot is picked up by this gate without a second list
+ * having to be updated in step. Item payloads carry no sectionType, so the slot
+ * *names* are what can be matched against them.
+ */
+function itemAssetSlotNames(registry) {
+  const names = new Set();
+  for (const entry of Object.values(registry)) {
+    for (const slot of Object.keys(entry.assetFields ?? {})) {
+      const match = slot.match(/^items\[\]\.(.+)$/);
+      if (match) names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+/**
+ * Canonical asset references carried inside a page command's payload.
+ *
+ * Uses the page-composition registry's own extractor as the source of truth --
+ * not a generic walk for keys named "assetId". A second, gate-local list of
+ * asset paths would drift from the one the Worker validates against, and a
+ * generic walk would classify any unrelated string field as an asset.
+ */
+async function pageAssetReferences(command, payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  const { MODULE_REGISTRY, extractModuleAssetReferences } = await loadPageRegistry();
+
+  const fromSection = (section) => {
+    if (!section || typeof section !== 'object' || typeof section.sectionType !== 'string') return [];
+    try {
+      return extractModuleAssetReferences({ sectionType: section.sectionType, props: section.props });
+    } catch {
+      // An unregistered module type is rejected by the schema gate; it is not
+      // this function's job to decide that.
+      return [];
+    }
+  };
+
+  if (command === 'create_page') {
+    return (Array.isArray(payload.sections) ? payload.sections : []).flatMap(fromSection);
+  }
+  if (command === 'insert_page_section' || command === 'update_page_section') {
+    return fromSection(payload);
+  }
+  if (command === 'insert_page_section_item' || command === 'update_page_section_item') {
+    const item = payload.item;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const { AssetId } = await loadPageSchemas();
+    // Only the slot names the registry declares, and only when the value is
+    // actually a canonical asset id -- so an unrelated string field named
+    // similarly is not mistaken for an asset.
+    return [...itemAssetSlotNames(MODULE_REGISTRY)]
+      .filter((slot) => AssetId.safeParse(item[slot]).success)
+      .map((slot) => ({ assetId: item[slot], assetPath: `item.${slot}`, role: 'item' }));
+  }
+  return [];
+}
+
+/**
+ * Whether an operation is image-bearing, in the sense the operating contract
+ * uses.
+ *
+ * Two ways to qualify: the command is an asset command, or its validated
+ * payload carries a canonical asset in a registered module slot. Deciding this
+ * from the command name alone rejected compliant page mutations that embed an
+ * assetId in their module props -- `mediaText.assetId`, a card's
+ * `items[].assetId` -- and let those same commands through without the flag.
+ */
+export async function isImageBearingOperation(command, validatedPayload) {
+  if (ASSET_COMMANDS.has(command)) return true;
+  return (await pageAssetReferences(command, validatedPayload)).length > 0;
+}
 
 /**
  * Whether this particular command brings an asset in through a provider, and
@@ -362,7 +434,7 @@ export async function validateCommand(command) {
   //      those, including when the asset is named by canonical id.
   //   2. Does a provider have to be ready? Only when the asset actually arrives
   //      through one.
-  const imageBearing = isImageBearingCommand(envelope.data.command);
+  const imageBearing = await isImageBearingOperation(envelope.data.command, payload.data);
   const intake = providerIntake(envelope.data.command, payload.data);
   const flagged = envelope.data.context.requiresAssetIntake === true;
 

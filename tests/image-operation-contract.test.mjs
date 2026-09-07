@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { repoRoot } from '../scripts/repo-root.mjs';
 import { loadCommandContracts, loadServerModule } from '../scripts/load-command-contracts.mjs';
-import { validateCommand, isImageBearingCommand, DispatchError } from '../scripts/dispatch-command.mjs';
+import { validateCommand, isImageBearingOperation, DispatchError } from '../scripts/dispatch-command.mjs';
 
 // "Is this image-bearing?" and "must a provider be ready?" are different
 // questions. Collapsing them into one boolean rejected every compliant command
@@ -52,12 +52,17 @@ const NOT_IMAGE_BEARING = {
   update_content: { ...CONTENT, changes: { title: 'New' } }
 };
 
-test('the image-bearing set is exactly the commands that carry an asset', () => {
-  for (const command of Object.keys(IMAGE_BEARING)) {
-    assert.ok(isImageBearingCommand(command), `${command} must be image-bearing`);
+test('the asset commands are image-bearing whatever their payload', async () => {
+  for (const [command, forms] of Object.entries(IMAGE_BEARING)) {
+    for (const payload of Object.values(forms)) {
+      assert.equal(await isImageBearingOperation(command, payload), true, `${command} must be image-bearing`);
+    }
   }
-  for (const command of Object.keys(NOT_IMAGE_BEARING)) {
-    assert.ok(!isImageBearingCommand(command), `${command} must not be image-bearing`);
+});
+
+test('commands that carry no asset are not image-bearing', async () => {
+  for (const [command, payload] of Object.entries(NOT_IMAGE_BEARING)) {
+    assert.equal(await isImageBearingOperation(command, payload), false, `${command} must not be image-bearing`);
   }
 });
 

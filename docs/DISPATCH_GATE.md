@@ -67,18 +67,39 @@ whichever site the workflow points at.
 `context.requiresAssetIntake` answers a contract question, and readiness answers
 an infrastructure one. They are deliberately not the same boolean.
 
-**Is the command image-bearing?** A property of the command itself. The
-operating contract requires the flag on every image-bearing operation, and a
-command naming an existing canonical `assetId` is still one of those. Answering
-this with "does a provider need to be ready?" rejected every such command before
-it reached preflight.
+**Is the operation image-bearing?** Decided from the command *and its validated
+payload*, because both can make it so:
 
-| Image-bearing | Not image-bearing |
-| --- | --- |
-| `attach_asset`, `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset`, `replace_page_section_item_asset`, `import_wordpress_asset` | everything else, including `remove_product_asset` and `reorder_product_assets`, which rearrange assets already in place |
+1. **Asset commands** — `attach_asset`, `replace_asset`,
+   `attach_product_asset`, `replace_product_asset`,
+   `replace_page_section_asset`, `replace_page_section_item_asset`,
+   `import_wordpress_asset`. Placing an asset is their purpose.
+2. **Page mutations carrying a canonical asset in a registered module slot** —
+   `create_page`, `insert_page_section`, `update_page_section`,
+   `insert_page_section_item`, `update_page_section_item`. A `mediaText.assetId`
+   or a card's `items[].assetId` makes that particular command image-bearing.
 
-The flag is required on the first set (`ASSET_INTAKE_FLAG_MISSING`) and refused
-on the second (`ASSET_INTAKE_FLAG_UNEXPECTED`).
+The second class is why this cannot be a fixed list of command names: the same
+command is image-bearing or not depending on what it carries.
+
+Which slots count comes from the **page-composition module registry** — the
+gate calls `extractModuleAssetReferences`, the same function the Worker
+validates with, and derives item slot names from `MODULE_REGISTRY`. There is
+deliberately no second list of asset paths in the gate, and no generic scan for
+fields named `assetId`: a module that gains an asset slot is picked up here
+automatically, and a string field the registry does not declare is not mistaken
+for an asset. A registered slot also has to hold a value that is actually a
+canonical asset id.
+
+Page commands that carry no module props or item body — `update_page`,
+`remove_page_section`, `reorder_page_sections`, `remove_page_section_item`,
+`reorder_page_section_items`, `rollback_page` — are never image-bearing.
+`rollback_page` restores assets that are already registered; its payload names a
+revision, not an asset.
+
+The flag is required whenever the operation is image-bearing
+(`ASSET_INTAKE_FLAG_MISSING`) and refused when it is not
+(`ASSET_INTAKE_FLAG_UNEXPECTED`).
 
 **Must a provider be ready?** Only when the asset actually arrives through one.
 Read from the validated payload:
