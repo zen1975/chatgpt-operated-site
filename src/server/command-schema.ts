@@ -162,10 +162,15 @@ export const CreateTimedContentPayload = z.object({
  * the same source the runtime uses.
  *
  * The supported public intake path is a bounded provider reference
- * (`AssetReference`) on `replace_asset`, `attach_product_asset`,
- * `replace_product_asset` and `replace_page_section_asset`, or a WordPress
- * media reference on `import_wordpress_asset`. Those carry an identifier, not
- * bytes; the intake layer fetches the bytes inside the Worker.
+ * (`AssetReference`) on `replace_asset`, `replace_product_asset` and
+ * `replace_page_section_asset`, or a WordPress media reference on
+ * `import_wordpress_asset`. Those carry an identifier, not bytes; the intake
+ * layer fetches the bytes inside the Worker.
+ *
+ * The attach commands -- `attach_asset`, `attach_product_asset` and
+ * `replace_page_section_item_asset` -- take a canonical assetId only and reject
+ * a reference outright, so an asset must already be in the Asset Engine before
+ * they can use it.
  */
 export { AssetIntakeDescriptor };
 

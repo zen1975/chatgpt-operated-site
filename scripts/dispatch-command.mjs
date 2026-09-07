@@ -110,29 +110,54 @@ async function installationSiteId() {
 }
 
 /**
- * Which commands carry an Asset Intake source, and where that source names its
- * provider. Derived from the payload -- never from context.requiresAssetIntake,
- * which is optional caller-supplied metadata.
+ * Whether a command is image-bearing, in the sense the operating contract uses.
+ *
+ * This is a property of the *command*, not of which form its asset takes.
+ * AGENTS.md and DAILY_OPERATION.md require `context.requiresAssetIntake: true`
+ * on image-bearing operations, and a compliant command that names an existing
+ * canonical assetId is still one of those. Treating "is this image-bearing?"
+ * and "must provider readiness run?" as one boolean rejected every such
+ * command before it could reach preflight.
  */
-function assetIntakeRequirement(command, payload) {
-  if (command === 'create_asset') {
-    return { required: true, provider: payload?.descriptor?.sourceProvider ?? null, via: 'payload.descriptor.sourceProvider' };
-  }
-  if (command === 'import_wordpress_asset') {
-    return { required: true, provider: 'wordpress', via: 'command' };
-  }
-  // Reference-bearing commands take *either* a canonical assetId already inside
-  // the Asset Engine, which needs no intake, or a provider reference, which
-  // does. Only the second form requires readiness.
-  if (REFERENCE_BEARING_COMMANDS.has(command) && payload?.reference) {
-    return { required: true, provider: payload.reference.provider ?? null, via: 'payload.reference.provider' };
-  }
-  return { required: false, provider: null, via: null };
-}
-
-const REFERENCE_BEARING_COMMANDS = new Set([
+const IMAGE_BEARING_COMMANDS = new Set([
+  'import_wordpress_asset',
+  'attach_asset',
   'replace_asset',
   'attach_product_asset',
+  'replace_product_asset',
+  'replace_page_section_asset',
+  'replace_page_section_item_asset'
+]);
+
+export const isImageBearingCommand = (command) => IMAGE_BEARING_COMMANDS.has(command);
+
+/**
+ * Whether this particular command brings an asset in through a provider, and
+ * from which provider.
+ *
+ * The narrower question. Only a provider reference needs intake -- a canonical
+ * assetId already exists inside the Asset Engine, so running a readiness check
+ * for it would gate the command on infrastructure it does not use.
+ */
+function providerIntake(command, payload) {
+  if (command === 'import_wordpress_asset') {
+    return { provider: 'wordpress', via: 'command' };
+  }
+  if (REFERENCE_BEARING_COMMANDS.has(command) && payload?.reference) {
+    return { provider: payload.reference.provider ?? null, via: 'payload.reference.provider' };
+  }
+  return null;
+}
+
+/**
+ * Commands whose payload may carry a provider reference.
+ *
+ * The attach commands are deliberately absent: their schemas require a
+ * canonical assetId and reject a reference, so listing them here would advertise
+ * an intake path that fails at gate 1.
+ */
+const REFERENCE_BEARING_COMMANDS = new Set([
+  'replace_asset',
   'replace_product_asset',
   'replace_page_section_asset'
 ]);
@@ -331,17 +356,24 @@ export async function validateCommand(command) {
     throw new DispatchError('target-site', 'TARGET_SITE_MISMATCH', `The command targets "${targetSite}" but this installation is "${siteId}". Refusing to mutate a site the command was not written for.`, { targetSite, installation: siteId });
   }
 
-  // Derived from the payload, then cross-checked against the caller's flag.
-  const intake = assetIntakeRequirement(envelope.data.command, payload.data);
+  // Two separate questions, deliberately not collapsed into one boolean.
+  //
+  //   1. Is this an image-bearing command? The contract requires the flag on
+  //      those, including when the asset is named by canonical id.
+  //   2. Does a provider have to be ready? Only when the asset actually arrives
+  //      through one.
+  const imageBearing = isImageBearingCommand(envelope.data.command);
+  const intake = providerIntake(envelope.data.command, payload.data);
   const flagged = envelope.data.context.requiresAssetIntake === true;
-  if (intake.required && !flagged) {
-    throw new DispatchError('asset-intake', 'ASSET_INTAKE_FLAG_MISSING', `${envelope.data.command} carries an Asset Intake source (${intake.via}) but context.requiresAssetIntake is not true. The command contradicts itself.`, intake);
+
+  if (imageBearing && !flagged) {
+    throw new DispatchError('asset-intake', 'ASSET_INTAKE_FLAG_MISSING', `${envelope.data.command} is an image-bearing operation, so context.requiresAssetIntake must be true.`, { command: envelope.data.command });
   }
-  if (!intake.required && flagged) {
-    throw new DispatchError('asset-intake', 'ASSET_INTAKE_FLAG_UNEXPECTED', `context.requiresAssetIntake is true but ${envelope.data.command} carries no Asset Intake source. The command contradicts itself.`);
+  if (!imageBearing && flagged) {
+    throw new DispatchError('asset-intake', 'ASSET_INTAKE_FLAG_UNEXPECTED', `context.requiresAssetIntake is true but ${envelope.data.command} is not an image-bearing operation.`);
   }
 
-  return { command: envelope.data, payload: payload.data, ruleVersion: RULE_VERSION, siteId, intake };
+  return { command: envelope.data, payload: payload.data, ruleVersion: RULE_VERSION, siteId, imageBearing, intake };
 }
 
 function signedControlRequest(endpoint, pathname, method, secret) {
@@ -555,7 +587,7 @@ export async function runDispatch(options, io = {}) {
   }
 
   // Step 3: new work. Everything an incoming command must satisfy today.
-  const { command: validated, intake } = await validateCommand(command);
+  const { command: validated, intake, imageBearing } = await validateCommand(command);
 
   log('--- validated command ---');
   log(JSON.stringify(validated, null, 2));
@@ -566,11 +598,14 @@ export async function runDispatch(options, io = {}) {
   log('gate 2/5     rule version   OK');
   log(`gate 3/5     target site    OK (${siteId})`);
 
-  if (intake.required) {
+  // Readiness runs only when an asset actually arrives through a provider. A
+  // command naming a canonical assetId is still image-bearing, but it needs no
+  // provider, so gating it on one would block it on unrelated infrastructure.
+  if (intake) {
     await checkAssetIntakeReadiness({ provider: intake.provider, endpoint, controlSecret, fetchImpl });
-    log(`gate 4/5     asset intake   READY (${intake.provider})`);
+    log(`gate 4/6     asset intake   READY (${intake.provider})`);
   } else {
-    log('gate 4/5     asset intake   not required by this command');
+    log(`gate 4/6     asset intake   no provider intake for this command${imageBearing ? ' (canonical asset)' : ''}`);
   }
 
   const receipt = await preflightCommand({

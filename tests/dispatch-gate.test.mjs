@@ -226,22 +226,23 @@ test('a text command claiming to need intake is refused', async () => {
   await assertBlocked(site, () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.code === 'ASSET_INTAKE_FLAG_UNEXPECTED');
 });
 
-// A reference-bearing command may also carry a canonical assetId instead, which
-// is already inside the Asset Engine and needs no intake.
-test('a replace_asset using a canonical assetId needs no intake', async () => {
+// A reference-bearing command may also name a canonical assetId, which is
+// already inside the Asset Engine. It is still an image-bearing operation --
+// the contract requires the flag -- but no provider has to be ready for it.
+test('a replace_asset using a canonical assetId is image-bearing but needs no provider', async () => {
   const command = await example('replace-content-image.json');
   command.payload.contentId = 'content_1';
   delete command.payload.reference;
   command.payload.assetId = 'asset_existing';
-  delete command.context.requiresAssetIntake;
 
-  const { intake } = await validateCommand(command);
-  assert.equal(intake.required, false);
+  const outcome = await validateCommand(command);
+  assert.equal(outcome.imageBearing, true, 'the contract still calls this image-bearing');
+  assert.equal(outcome.intake, null, 'but no provider readiness is required');
 });
 
-test('the intake requirement is read from the payload, not the flag', async () => {
+test('provider readiness is derived from the payload, not from the flag', async () => {
   const { intake } = await validateCommand(await imageCommand());
-  assert.deepEqual({ required: intake.required, provider: intake.provider }, { required: true, provider: 'google_drive' });
+  assert.deepEqual({ provider: intake.provider, via: intake.via }, { provider: 'google_drive', via: 'payload.reference.provider' });
 });
 
 // ------------------------------------------- gate 4: provider-aware readiness
