@@ -6,7 +6,16 @@ export type StoredJob = {
   result_json: string | null;
   command_digest: string | null;
   command_type: string | null;
+  lease_token?: string | null;
+  lease_expires_at?: string | null;
 } | null;
+
+/** A running attempt still holds its claim only while its lease is unexpired. */
+export function leaseIsLive(stored: NonNullable<StoredJob>, now = Date.now()) {
+  if (!stored.lease_expires_at) return true; // no lease recorded: treat as live, never reclaim blindly
+  const expiry = Date.parse(stored.lease_expires_at);
+  return !Number.isFinite(expiry) || expiry > now;
+}
 
 export type ClaimOutcome =
   | { kind: 'claimed' }
@@ -21,10 +30,11 @@ export type ClaimOutcome =
  * has not passed schema, rule-version, authorization and preflight must not
  * leave a `running` row behind when one of those refuses it.
  */
-export function evaluateExistingJob(commandId: string, commandType: string, submittedDigest: string, stored: StoredJob):
+export function evaluateExistingJob(commandId: string, commandType: string, submittedDigest: string, stored: StoredJob, now = Date.now()):
   | { kind: 'replay'; result: unknown }
   | { kind: 'proceed-new' }
-  | { kind: 'proceed-after-failure' } {
+  | { kind: 'proceed-after-failure' }
+  | { kind: 'reclaim-expired-lease' } {
   if (!stored) return { kind: 'proceed-new' };
 
   if (!stored.command_digest) {
@@ -37,7 +47,12 @@ export function evaluateExistingJob(commandId: string, commandType: string, subm
     return { kind: 'replay', result: stored.result_json ? JSON.parse(stored.result_json) : null };
   }
   if (stored.status === 'running') {
-    throw new CommandError('CONFLICT', 'COMMAND_IN_PROGRESS', 'This command is already executing. Wait for it to finish rather than running it a second time.', true, { commandId });
+    // The identity checks above have already run, so a stale lease can only ever
+    // be reclaimed by the same command. A live one is a real execution.
+    if (leaseIsLive(stored, now)) {
+      throw new CommandError('CONFLICT', 'COMMAND_IN_PROGRESS', 'This command is already executing. Wait for it to finish rather than running it a second time.', true, { commandId });
+    }
+    return { kind: 'reclaim-expired-lease' };
   }
   return { kind: 'proceed-after-failure' };
 }

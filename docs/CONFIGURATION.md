@@ -100,7 +100,7 @@ non-example file; keep the example as the documented default.
 | --- | --- | --- |
 | `/api/internal/commands` | `COMMAND_HMAC_SECRET`, 5-minute signature window | GitHub Actions dispatch |
 | `/api/v1/commands` | `COMMAND_HMAC_SECRET`, 5-minute signature window | Authenticated command clients using the REST envelope |
-| `/api/emergency/news` | `EMERGENCY_NEWS_HMAC_SECRET`, 5-minute signature window | Out-of-band emergency publication |
+| `/api/emergency/news` | `EMERGENCY_NEWS_HMAC_SECRET`, 5-minute signature window | Out-of-band emergency publication. Targets this installation's canonical `site.id` like any other command; its origin is recorded as the actor, not as the target site |
 | `/api/control/*` | `CONTROL_READ_HMAC_SECRET`, 5-minute signature window | Read-only state, contract discovery, and command status with its recorded digest (`/api/control/commands/{commandId}`) |
 
 The dispatch gate (`docs/DISPATCH_GATE.md`) is the supported caller of
