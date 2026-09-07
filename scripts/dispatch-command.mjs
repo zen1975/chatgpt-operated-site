@@ -16,15 +16,32 @@
 //   2. Rule version  context.ruleVersion equals the runtime rule version, so a
 //                    command written against an older contract stops here
 //                    rather than being rejected after dispatch.
-//   3. Preflight     an authenticated, read-only, side-effect-free check of the
+//   3. Target site   context.targetSite equals this installation's canonical
+//                    identity from config/site-profile.json. The Worker does not
+//                    check this, and the endpoint comes from local
+//                    configuration, so without this gate a command prepared for
+//                    another customer could be applied to whichever site the
+//                    workflow points at.
+//   4. Readiness     for commands that actually carry an Asset Intake source,
+//                    the authenticated readiness check for the provider that
+//                    source names. AGENTS.md assigns this to the dispatch gate
+//                    precisely because the ChatGPT client cannot perform an
+//                    authenticated check itself.
+//   5. Preflight     an authenticated, read-only, side-effect-free check of the
 //                    current state (existence and expectedVersion). Its receipt
 //                    -- commandDigest plus contractVersion -- is bound into the
 //                    envelope, and the Worker re-derives the digest and refuses
 //                    a command that changed after it was attested.
-//   4. Readiness     for image-bearing commands, the authenticated Asset Intake
-//                    readiness check. AGENTS.md assigns this to the dispatch
-//                    gate precisely because the ChatGPT client cannot perform an
-//                    authenticated check itself.
+//
+// Gates 3 and 4 are derived, not declared. targetSite is required rather than
+// optional, and the Asset Intake requirement is read out of the validated
+// payload; context.requiresAssetIntake is caller-supplied metadata that is
+// cross-checked against the payload and rejected when the two disagree.
+//
+// One path skips the state gates: a commandId the installation has already
+// recorded as successful. That is a completed mutation being re-answered after
+// a lost response, not new work -- its expectedVersion is legitimately stale.
+// A commandId the installation has never seen is never treated this way.
 //
 // Secrets are used to compute signatures and are never printed. The command
 // document is echoed as the operation record; it must never carry credentials.
@@ -33,6 +50,57 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { repoRoot } from './repo-root.mjs';
 import { loadCommandContracts, loadRuleVersion } from './load-command-contracts.mjs';
+
+/** The canonical identity of this installation. */
+async function installationSiteId() {
+  const profile = JSON.parse(await readFile(path.join(repoRoot, 'config/site-profile.json'), 'utf8'));
+  const id = profile?.site?.id;
+  if (typeof id !== 'string' || !id.trim()) {
+    throw new DispatchError('target-site', 'SITE_IDENTITY_MISSING', 'config/site-profile.json does not define site.id, so the gate cannot prove which installation it is dispatching to.');
+  }
+  return id;
+}
+
+/**
+ * Which commands carry an Asset Intake source, and where that source names its
+ * provider. Derived from the payload -- never from context.requiresAssetIntake,
+ * which is optional caller-supplied metadata.
+ */
+function assetIntakeRequirement(command, payload) {
+  if (command === 'create_asset') {
+    return { required: true, provider: payload?.descriptor?.sourceProvider ?? null, via: 'payload.descriptor.sourceProvider' };
+  }
+  if (command === 'import_wordpress_asset') {
+    return { required: true, provider: 'wordpress', via: 'command' };
+  }
+  // Reference-bearing commands take *either* a canonical assetId already inside
+  // the Asset Engine, which needs no intake, or a provider reference, which
+  // does. Only the second form requires readiness.
+  if (REFERENCE_BEARING_COMMANDS.has(command) && payload?.reference) {
+    return { required: true, provider: payload.reference.provider ?? null, via: 'payload.reference.provider' };
+  }
+  return { required: false, provider: null, via: null };
+}
+
+const REFERENCE_BEARING_COMMANDS = new Set([
+  'replace_asset',
+  'attach_product_asset',
+  'replace_product_asset',
+  'replace_page_section_asset'
+]);
+
+/**
+ * Providers with a canonical readiness mechanism in this application.
+ *
+ * Only Google Drive has one: /api/control/readiness/asset-intake/ evaluates
+ * Drive credentials and the Drive intake folder specifically. Treating that
+ * verdict as evidence for any other provider would be inventing a check the
+ * application does not implement, so every other provider fails closed here
+ * rather than being waved through or judged by the wrong signal.
+ */
+const READINESS_MECHANISMS = {
+  google_drive: { pathname: '/api/control/readiness/asset-intake/', description: 'Google Drive Asset Intake readiness' }
+};
 
 class DispatchError extends Error {
   constructor(stage, code, message, details) {
@@ -108,7 +176,31 @@ export async function validateCommand(command) {
     );
   }
 
-  return { command: envelope.data, ruleVersion: RULE_VERSION };
+  // The Worker does not check targetSite, and the endpoint comes from this
+  // repository's own configuration -- so a command prepared for another
+  // installation, run from the wrong repository, would otherwise be applied to
+  // whichever site this workflow happens to point at. Required, not optional:
+  // an absent targetSite is an unaddressed command, not a wildcard.
+  const siteId = await installationSiteId();
+  const targetSite = envelope.data.context.targetSite;
+  if (!targetSite) {
+    throw new DispatchError('target-site', 'TARGET_SITE_REQUIRED', `The command does not name a target site. This installation is "${siteId}"; set context.targetSite to it.`);
+  }
+  if (targetSite !== siteId) {
+    throw new DispatchError('target-site', 'TARGET_SITE_MISMATCH', `The command targets "${targetSite}" but this installation is "${siteId}". Refusing to mutate a site the command was not written for.`, { targetSite, installation: siteId });
+  }
+
+  // Derived from the payload, then cross-checked against the caller's flag.
+  const intake = assetIntakeRequirement(envelope.data.command, payload.data);
+  const flagged = envelope.data.context.requiresAssetIntake === true;
+  if (intake.required && !flagged) {
+    throw new DispatchError('asset-intake', 'ASSET_INTAKE_FLAG_MISSING', `${envelope.data.command} carries an Asset Intake source (${intake.via}) but context.requiresAssetIntake is not true. The command contradicts itself.`, intake);
+  }
+  if (!intake.required && flagged) {
+    throw new DispatchError('asset-intake', 'ASSET_INTAKE_FLAG_UNEXPECTED', `context.requiresAssetIntake is true but ${envelope.data.command} carries no Asset Intake source. The command contradicts itself.`);
+  }
+
+  return { command: envelope.data, payload: payload.data, ruleVersion: RULE_VERSION, siteId, intake };
 }
 
 function signedControlRequest(endpoint, pathname, method, secret) {
@@ -127,8 +219,18 @@ function signedControlRequest(endpoint, pathname, method, secret) {
 }
 
 /** Gate 4. Only for image-bearing commands. */
-export async function checkAssetIntakeReadiness({ endpoint, controlSecret, fetchImpl = fetch }) {
-  const pathname = '/api/control/readiness/asset-intake/';
+export async function checkAssetIntakeReadiness({ provider, endpoint, controlSecret, fetchImpl = fetch }) {
+  const mechanism = READINESS_MECHANISMS[provider];
+  if (!mechanism) {
+    throw new DispatchError(
+      'readiness',
+      'ASSET_INTAKE_READINESS_UNSUPPORTED',
+      `This application has no canonical readiness check for the "${provider}" Asset Intake provider, so the gate cannot prove it is usable. ` +
+        `Refusing to dispatch rather than substituting another provider's verdict. Supported: ${Object.keys(READINESS_MECHANISMS).join(', ')}.`,
+      { provider, supported: Object.keys(READINESS_MECHANISMS) }
+    );
+  }
+  const pathname = mechanism.pathname;
   const { url, init } = signedControlRequest(endpoint, pathname, 'GET', controlSecret);
   const response = await fetchImpl(url, init);
   const body = await response.json().catch(() => null);
@@ -182,6 +284,29 @@ export function bindPreflightReceipt(command, receipt) {
   };
 }
 
+/**
+ * Has this exact commandId already been executed?
+ *
+ * This is what makes a lost dispatch response recoverable without opening a
+ * hole: the replay path is entered only for a commandId the installation has
+ * already recorded as successful. A commandId the installation has never seen
+ * is new work and goes through every gate, so this is not a general preflight
+ * bypass.
+ */
+export async function lookupCommand({ commandId, endpoint, controlSecret, fetchImpl = fetch }) {
+  const pathname = `/api/control/commands/${encodeURIComponent(commandId)}/`;
+  const { url, init } = signedControlRequest(endpoint, pathname, 'GET', controlSecret);
+  const response = await fetchImpl(url, init);
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok || !body?.success) {
+    // Fail closed. Not knowing whether the command already ran is not the same
+    // as knowing it did not.
+    throw new DispatchError('idempotency', body?.error?.code || 'COMMAND_LOOKUP_FAILED', body?.error?.message || `Could not determine whether ${commandId} has already been executed (HTTP ${response.status}).`);
+  }
+  return body;
+}
+
 export async function dispatchToWorker({ command, endpoint, commandSecret, fetchImpl = fetch }) {
   const body = JSON.stringify(command);
   const timestamp = new Date().toISOString();
@@ -209,34 +334,66 @@ export async function runDispatch(options, io = {}) {
   log(`command      ${command.command ?? '(unknown)'}`);
   log(`commandId    ${command.commandId ?? '(unknown)'}`);
 
-  const { command: validated } = await validateCommand(command);
-  log('gate 1/4     schema        OK');
-  log('gate 2/4     rule version  OK');
+  const { command: validated, siteId, intake } = await validateCommand(command);
+  log('gate 1/5     schema         OK');
+  log('gate 2/5     rule version   OK');
+  log(`gate 3/5     target site    OK (${siteId})`);
 
   const endpoint = (options.endpoint ?? requireEnv('SITE_COMMAND_ENDPOINT')).replace(/\/+$/, '');
   const controlSecret = options.controlSecret ?? requireEnv('CONTROL_READ_HMAC_SECRET');
 
-  if (validated.context.requiresAssetIntake) {
-    const readiness = await checkAssetIntakeReadiness({ endpoint, controlSecret, fetchImpl });
-    log(`gate 4/4     asset intake  READY (${readiness.provider ?? 'provider'})`);
+  // Before any state gate: a command that already succeeded is a completed
+  // mutation being re-answered, not new work. Its expectedVersion is
+  // legitimately stale now, so running preflight against it would report a
+  // conflict and strand a dispatch whose response was merely lost.
+  const prior = await lookupCommand({ commandId: validated.commandId, endpoint, controlSecret, fetchImpl });
+
+  if (prior.known && prior.status === 'success') {
+    log(`\nreplay       ${validated.commandId} already succeeded at ${prior.finishedAt ?? 'an earlier run'}.`);
+    log('             Re-sending so the Worker returns the recorded result. No new mutation.');
+
+    if (options.dryRun) {
+      log('\ndry run: nothing was dispatched. The recorded result is shown above.');
+      return { dispatched: false, replay: true, command: validated, priorResult: prior.result };
+    }
+
+    const commandSecret = options.commandSecret ?? requireEnv('COMMAND_HMAC_SECRET');
+    // The Worker resolves idempotency by commandId before any contract gate, so
+    // this returns the original result rather than mutating a second time.
+    const result = await dispatchToWorker({ command: validated, endpoint, commandSecret, fetchImpl });
+    if (!result.idempotent) {
+      throw new DispatchError('idempotency', 'REPLAY_NOT_IDEMPOTENT', `${validated.commandId} was recorded as successful, but the Worker did not answer the replay idempotently. Stopping rather than risking a second mutation.`);
+    }
+    log('\nrecovered    original result returned; mutation ran once.');
+    return { dispatched: true, replay: true, idempotent: true, command: validated, result, priorResult: prior.result };
+  }
+
+  if (prior.known && prior.status !== 'success') {
+    log(`             previous attempt for this commandId ended "${prior.status}"; re-running the gates.`);
+  }
+
+  if (intake.required) {
+    const readiness = await checkAssetIntakeReadiness({ provider: intake.provider, endpoint, controlSecret, fetchImpl });
+    log(`gate 4/5     asset intake   READY (${intake.provider})`);
+    void readiness;
   } else {
-    log('gate 4/4     asset intake  not required by this command');
+    log('gate 4/5     asset intake   not required by this command');
   }
 
   const receipt = await preflightCommand({ command: validated, endpoint, controlSecret, fetchImpl });
-  log(`gate 3/4     preflight     OK (${receipt.commandDigest})`);
+  log(`gate 5/5     preflight      OK (${receipt.commandDigest})`);
 
   const bound = bindPreflightReceipt(validated, receipt);
 
   if (options.dryRun) {
     log('\ndry run: all gates passed; nothing was dispatched.');
-    return { dispatched: false, command: bound, receipt };
+    return { dispatched: false, replay: false, command: bound, receipt };
   }
 
   const commandSecret = options.commandSecret ?? requireEnv('COMMAND_HMAC_SECRET');
   const result = await dispatchToWorker({ command: bound, endpoint, commandSecret, fetchImpl });
   log(`\ndispatched   ${result.idempotent ? 'already applied (idempotent replay)' : 'applied'}`);
-  return { dispatched: true, command: bound, receipt, result };
+  return { dispatched: true, replay: false, command: bound, receipt, result };
 }
 
 export { DispatchError, hmacHex, timingSafeEqual };

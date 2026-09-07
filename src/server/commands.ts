@@ -236,14 +236,26 @@ async function verifyPreflightBinding(command: z.infer<typeof CommandEnvelope>) 
 }
 
 export async function executeCommand(input:unknown, runtime:CommandRuntime = {}) {
-  // Fixed pipeline: envelope -> idempotency -> rule version -> command schema -> normalize/resolvers -> business rules -> transaction.
+  // Fixed pipeline: envelope -> authorization -> idempotency -> preflight binding
+  // -> rule version -> command schema -> normalize/resolvers -> business rules -> transaction.
   const cmd = CommandEnvelope.parse(input);
   // All mutation commands cross the same trusted authorization boundary before
   // idempotency lookup, payload validation, provider fetch, or storage work.
   authorizeMutation(runtime, cmd.command);
-  await verifyPreflightBinding(cmd);
+  // Idempotency is resolved before the contract gates, not after. A commandId
+  // that already succeeded identifies a completed mutation, and re-answering it
+  // must not depend on the caller still satisfying gates that describe how a
+  // *new* command is admitted: after the first success the state has moved on,
+  // so a re-sent command's expectedVersion is legitimately stale and its
+  // preflight receipt legitimately spent. Making the replay re-pass them would
+  // leave a dispatch whose response was lost permanently unrecoverable.
+  //
+  // assertRuleVersion has always sat behind this line for the same reason; the
+  // preflight binding now does too. Authorization stays in front: a caller
+  // without the scope is refused whether or not the command already ran.
   const prior = await existingJob(cmd.commandId);
   if (prior?.status === 'success') return { success:true, commandId:cmd.commandId, idempotent:true, result: prior.result_json ? JSON.parse(prior.result_json) : null };
+  await verifyPreflightBinding(cmd);
   assertRuleVersion(cmd.context.ruleVersion);
 
   try {

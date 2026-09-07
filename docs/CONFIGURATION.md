@@ -34,7 +34,7 @@ Declared under `vars` in `wrangler.jsonc`.
 | `SITE_TIMEZONE` | Timezone applied to scheduling and timed-content windows. |
 | `COMMAND_TRUSTED_ACTOR` | Actor name recorded for commands arriving on the trusted ingress. |
 | `COMMAND_TRUSTED_SCOPES` | Comma-separated mutation scopes granted to the trusted ingress. A command whose scope is absent is rejected before any payload validation or storage work. |
-| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. Must include `command:preflight` for the dispatch gate's preflight and `intake:read` for its Asset Intake readiness check. |
+| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. The dispatch gate needs `command:preflight` (preflight), `intake:read` (Asset Intake readiness) and `command:read` (idempotent replay lookup). |
 | `WORDPRESS_ASSET_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `import_wordpress_asset`. Not shipped in `wrangler.jsonc`: the command fails closed with `WORDPRESS_ASSET_ORIGIN_ALLOWLIST_REQUIRED` until an installation that wants WordPress import adds it. Add it to `vars` with the origins to import from, for example `https://legacy.example.com`. |
 
 Scope names are enumerated by `MUTATION_SCOPES` in `src/server/commands.ts`.
@@ -101,7 +101,7 @@ non-example file; keep the example as the documented default.
 | `/api/internal/commands` | `COMMAND_HMAC_SECRET`, 5-minute signature window | GitHub Actions dispatch |
 | `/api/v1/commands` | `COMMAND_HMAC_SECRET`, 5-minute signature window | Authenticated command clients using the REST envelope |
 | `/api/emergency/news` | `EMERGENCY_NEWS_HMAC_SECRET`, 5-minute signature window | Out-of-band emergency publication |
-| `/api/control/*` | `CONTROL_READ_HMAC_SECRET`, 5-minute signature window | Read-only state and contract discovery |
+| `/api/control/*` | `CONTROL_READ_HMAC_SECRET`, 5-minute signature window | Read-only state, contract discovery, and command status (`/api/control/commands/{commandId}`) |
 
 The dispatch gate (`docs/DISPATCH_GATE.md`) is the supported caller of
 `/api/control/preflight` and `/api/internal/commands`. It needs its own
