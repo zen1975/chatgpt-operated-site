@@ -7,10 +7,10 @@
 // import that actually reads `env` at module scope will fail loudly here.
 import { build } from 'esbuild';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { repoRoot } from './repo-root.mjs';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cacheDir = path.join(repoRoot, 'node_modules', '.cache', 'contract-checks');
 
 const workersStub = {
@@ -33,19 +33,31 @@ const workersStub = {
 
 const cache = new Map();
 
-/** Bundle a `src/` TypeScript module and import it as ESM in plain Node. */
-export async function loadServerModule(relativePath) {
-  const existing = cache.get(relativePath);
+/**
+ * Bundle a `src/` TypeScript module and import it as ESM in plain Node.
+ *
+ * `extraExports` is appended to the generated entry. It exists so callers can
+ * pull Zod itself out of the *same* bundle: `.meta()` writes into Zod's global
+ * registry, and a separately imported copy of Zod has its own registry, so
+ * schema generation run against the outer copy silently loses every `.meta()`
+ * constraint.
+ */
+export async function loadServerModule(relativePath, extraExports = '') {
+  const cacheKey = `${relativePath}::${extraExports}`;
+  const existing = cache.get(cacheKey);
   if (existing) return existing;
 
-  const name = relativePath.replace(/[^a-z0-9]+/gi, '-');
+  // `node --test` runs each test file in its own process, concurrently. A
+  // shared output path lets one process import a bundle another is still
+  // writing, which fails only on a cold cache. Each process gets its own file.
+  const name = `${cacheKey.replace(/[^a-z0-9]+/gi, '-')}.${process.pid}`;
   const entryFile = path.join(cacheDir, `${name}.entry.ts`);
   const outFile = path.join(cacheDir, `${name}.mjs`);
 
   await mkdir(cacheDir, { recursive: true });
   await writeFile(
     entryFile,
-    `export * from '${path.join(repoRoot, relativePath).split(path.sep).join('/')}';\n`,
+    `export * from '${path.join(repoRoot, relativePath).split(path.sep).join('/')}';\n${extraExports}`,
     'utf8'
   );
 
@@ -61,11 +73,12 @@ export async function loadServerModule(relativePath) {
   });
 
   const loaded = await import(pathToFileURL(outFile).href);
-  cache.set(relativePath, loaded);
+  cache.set(cacheKey, loaded);
   return loaded;
 }
 
-export const loadCommandContracts = () => loadServerModule('src/server/command-schema.ts');
+export const loadCommandContracts = () =>
+  loadServerModule('src/server/command-schema.ts', `export { z } from 'zod';\n`);
 export const loadRuleVersion = () => loadServerModule('src/server/rule-version.ts');
 
 export { repoRoot };

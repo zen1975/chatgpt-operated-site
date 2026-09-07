@@ -57,6 +57,22 @@ export const CreateTaxonomyTermPayload = z.object({
   seoDescription: z.string().max(500).nullable().optional()
 }).strict();
 
+/**
+ * `content_term_links` is keyed by (content_type, content_id, term_id) and the
+ * create path inserts one row per submitted id with no conflict handling, so a
+ * repeated id fails the write with a primary-key violation instead of being
+ * ignored. Duplicates are rejected at the schema boundary, where the operator
+ * still gets a correctable error.
+ *
+ * `.meta` publishes the same constraint into the generated JSON Schema, so the
+ * runtime rule and the published contract cannot drift apart.
+ */
+const TaxonomyTermIds = z
+  .array(z.string().min(1))
+  .refine((ids) => new Set(ids).size === ids.length, 'Taxonomy term ids must be unique')
+  .meta({ uniqueItems: true })
+  .default([]);
+
 export const CreateNewsPayload = z.object({
   title: z.string().min(1).max(80),
   slug: z.string()
@@ -68,8 +84,8 @@ export const CreateNewsPayload = z.object({
   blocks: ContentAST,
   contentType: z.enum(['news','article']).default('news'),
   templateProfile: z.string().max(80).default('news-default'),
-  categoryTermIds: z.array(z.string().min(1)).default([]),
-  tagTermIds: z.array(z.string().min(1)).default([]),
+  categoryTermIds: TaxonomyTermIds,
+  tagTermIds: TaxonomyTermIds,
   publishedAt: z.string().datetime().nullable().optional(),
   startsAt: z.string().datetime().nullable().optional(),
   endsAt: z.string().datetime().nullable().optional(),

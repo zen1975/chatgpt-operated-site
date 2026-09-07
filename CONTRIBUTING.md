@@ -22,8 +22,17 @@ npm run verify   # build + contract checks
 ```
 
 Requires Node 22.23.2 and npm 10.9.8, as pinned in `package.json`. If you would
-rather not match those on your host, `docker build -t chatgpt-operated-site .`
-reproduces the supported environment.
+rather not match those on your host, the container reproduces the supported
+environment and runs the same verification:
+
+```bash
+docker build -t chatgpt-operated-site .
+docker run --rm chatgpt-operated-site
+```
+
+The image carries no git metadata, so this also exercises the contract checks
+against the distribution as shipped rather than against a checkout. Both are
+run in CI.
 
 Do not regenerate `package-lock.json` as part of an unrelated change, and do not
 bump dependencies opportunistically. Dependency changes are their own pull
@@ -37,19 +46,23 @@ test:contract` runs the contract suite in `tests/`, which asserts:
 - every example in `examples/commands/` validates against the **current** Zod
   schemas in `src/server/`, including the runtime rule version — an example that
   cannot actually execute is a failing test
-- the published JSON Schemas in `schemas/` have not drifted from the
-  implementation
+- the published JSON Schemas in `schemas/` are byte-identical to what
+  `npm run schemas:generate` produces from the Zod source, so every constraint
+  Zod can express — required, type, enum, format, pattern, limits, uniqueItems,
+  defaults, `additionalProperties` — is compared, not just property names
 - the migrations in `migrations/` are sequential, append-only, and apply in
   order to a brand-new database
 - no tracked file contains credential-shaped content, private-upstream
   identifiers, or non-English content
 - the committed Cloudflare identifiers are still placeholders
-- every `wrangler.jsonc` binding is typed in `src/env.d.ts`, every secret the
-  Worker reads is documented in `docs/CONFIGURATION.md`, and every Makefile and
-  Dockerfile reference points at something the repository actually ships
+- every environment name `src/` actually reads — extracted from the code, not
+  listed by hand — is typed in `src/env.d.ts` and documented in
+  `docs/CONFIGURATION.md`, and every Makefile and Dockerfile reference points at
+  something the repository actually ships
 
-If you change a schema, the failing contract test is telling you which
-downstream artifact to update — update it rather than relaxing the test.
+If you change a schema, run `npm run schemas:generate` and commit the result.
+The failing contract test is telling you which downstream artifact to update —
+update it rather than relaxing the test.
 
 ## Adding a new operable site area
 

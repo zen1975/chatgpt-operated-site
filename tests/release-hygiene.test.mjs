@@ -1,19 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { repoRoot } from '../scripts/load-command-contracts.mjs';
+import { distributionFiles, assertUsableManifest } from '../scripts/distribution-files.mjs';
+import { collectRuntimeConfigReads, NOT_CONFIGURATION } from '../scripts/collect-runtime-config.mjs';
 
-const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8' })
-  .split('\0')
-  .filter(Boolean);
+// Resolved from git where git metadata exists, and from the filesystem
+// otherwise, so these checks inspect the same set inside a Docker image that
+// carries neither `.git` nor a git binary.
+const manifest = await distributionFiles();
+const tracked = manifest.files;
 
 const readTracked = async (relative) => readFile(path.join(repoRoot, relative), 'utf8');
 const textFiles = tracked.filter((file) => !/\.(png|jpg|jpeg|gif|webp|avif|ico|woff2?|pdf)$/i.test(file));
 
+// Guards every check below: an under-collected manifest would make them pass
+// by inspecting nothing.
+test(`the ${manifest.source} file manifest is complete`, () => {
+  assertUsableManifest(manifest, assert);
+});
+
 test('a public distribution ships its licence and release policy', () => {
-  for (const required of ['LICENSE', 'SECURITY.md', 'CONTRIBUTING.md', '.gitignore']) {
+  for (const required of ['LICENSE', 'SECURITY.md', 'CONTRIBUTING.md', '.gitignore', '.dockerignore']) {
     assert.ok(tracked.includes(required), `${required} must be committed before public release`);
   }
 });
@@ -24,6 +33,9 @@ test('.gitignore excludes local secret material', async () => {
     assert.ok(ignore.includes(pattern), `.gitignore must cover ${pattern}`);
   }
 });
+
+// These files name the markers on purpose, so they cannot be scanned for them.
+const SELF_REFERENTIAL = new Set(['tests/release-hygiene.test.mjs', 'scripts/distribution-files.mjs']);
 
 // Values, not just filenames, are the risk here: this suite reports the file
 // and the pattern class only, never the matched text.
@@ -56,7 +68,7 @@ test('no tracked file carries private-upstream or operator identifiers', async (
   const markers = [/\bhack-sub\b/, /\bzen1975\b/, /corporate-ai-site-starter/, /\bupnext-site\b/, /\/Users\//];
   const findings = [];
   for (const file of textFiles) {
-    if (file === 'tests/release-hygiene.test.mjs') continue;
+    if (SELF_REFERENTIAL.has(file)) continue;
     const content = await readTracked(file);
     for (const marker of markers) {
       if (marker.test(content)) findings.push(`${file}: ${marker}`);
@@ -69,7 +81,7 @@ test('the distribution is English-only', async () => {
   const cjk = /[぀-ヿ一-鿿]/;
   const findings = [];
   for (const file of textFiles) {
-    if (file === 'tests/release-hygiene.test.mjs') continue;
+    if (SELF_REFERENTIAL.has(file)) continue;
     if (cjk.test(await readTracked(file))) findings.push(file);
   }
   assert.deepEqual(findings, [], `non-English content in a neutral English distribution:\n${findings.join('\n')}`);
@@ -120,9 +132,54 @@ test('every wrangler binding and var is declared in the runtime env type', async
   }
 });
 
-test('every secret the Worker reads is documented for installers', async () => {
-  const doc = await readTracked('docs/CONFIGURATION.md');
-  for (const secret of ['COMMAND_HMAC_SECRET', 'CONTROL_READ_HMAC_SECRET', 'EMERGENCY_NEWS_HMAC_SECRET']) {
-    assert.ok(doc.includes(secret), `docs/CONFIGURATION.md must document ${secret}`);
+// Enumerating expected names by hand is how WORDPRESS_ASSET_ALLOWED_ORIGINS
+// stayed undocumented while the Worker rejected every WordPress import without
+// it. The expected set is derived from the implementation instead.
+test('every environment name the implementation reads is typed', async () => {
+  const [reads, envTypes] = await Promise.all([collectRuntimeConfigReads(), readTracked('src/env.d.ts')]);
+  const undeclared = [];
+  for (const [name, files] of reads) {
+    if (!new RegExp(`\\b${name}\\??:`).test(envTypes)) undeclared.push(`${name} (read in ${[...files].join(', ')})`);
+  }
+  assert.deepEqual(undeclared, [], `src/env.d.ts does not declare:\n${undeclared.join('\n')}`);
+});
+
+test('every environment name the implementation reads is documented', async () => {
+  const [reads, doc] = await Promise.all([collectRuntimeConfigReads(), readTracked('docs/CONFIGURATION.md')]);
+  const undocumented = [];
+  for (const [name, files] of reads) {
+    if (NOT_CONFIGURATION.has(name)) continue;
+    if (!doc.includes(name)) undocumented.push(`${name} (read in ${[...files].join(', ')})`);
+  }
+  assert.deepEqual(undocumented, [], `docs/CONFIGURATION.md does not document:\n${undocumented.join('\n')}`);
+});
+
+test('every wrangler binding and var is documented for installers', async () => {
+  const [wrangler, doc] = await Promise.all([readTracked('wrangler.jsonc'), readTracked('docs/CONFIGURATION.md')]);
+  const config = JSON.parse(wrangler.replace(/^\s*\/\/.*$/gm, ''));
+  const declared = [
+    ...(config.d1_databases || []).map((entry) => entry.binding),
+    ...(config.r2_buckets || []).map((entry) => entry.binding),
+    ...(config.kv_namespaces || []).map((entry) => entry.binding),
+    ...Object.keys(config.vars || {})
+  ];
+  for (const name of declared) {
+    assert.ok(doc.includes(name), `docs/CONFIGURATION.md must document the ${name} binding or variable`);
+  }
+});
+
+test('.dockerignore excludes local dependencies and secret material', async () => {
+  const dockerignore = await readTracked('.dockerignore');
+  const patterns = dockerignore.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  for (const required of [
+    '.git', 'node_modules', 'dist', '.astro', '.wrangler', '.dev.vars', '.dev.vars.*',
+    '.env', '.env.*', '*.pem', '*.key', 'service-account*.json', 'coverage', '.cache', '.DS_Store', '*.log'
+  ]) {
+    assert.ok(patterns.includes(required), `.dockerignore must exclude ${required}`);
+  }
+
+  // Excluding these would ship an image whose contract checks inspect nothing.
+  for (const kept of ['examples', 'schemas', 'config', 'migrations', 'tests', 'scripts', 'src', 'docs', 'package.json', 'package-lock.json']) {
+    assert.ok(!patterns.includes(kept), `.dockerignore must not exclude ${kept}: the image runs the contract checks against it`);
   }
 });

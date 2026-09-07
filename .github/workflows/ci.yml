@@ -31,3 +31,19 @@ jobs:
       # configuration still agree with the implementation.
       - name: Contract checks
         run: npm run test:contract
+
+  # The documented container flow is a supported entry point for third parties
+  # who will not match the pinned Node/npm versions on their host. It broke
+  # once already without anyone noticing, so it is exercised here rather than
+  # trusted. This also proves the contract checks work with no git metadata:
+  # `.dockerignore` excludes `.git` and the base image has no git binary.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t chatgpt-operated-site .
+
+      - name: Run the documented verification inside the image
+        run: docker run --rm chatgpt-operated-site
