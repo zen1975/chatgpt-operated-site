@@ -1,0 +1,52 @@
+name: Dependency Audit Once
+
+on:
+  push:
+    branches:
+      - audit/dependency-security-20260907
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - name: Production dependency audit
+        shell: bash
+        run: |
+          set +e
+          npm audit --omit=dev --json > production-audit.json
+          code=$?
+          echo "production_audit_exit=$code" >> "$GITHUB_STEP_SUMMARY"
+          node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync("production-audit.json","utf8")); console.log(JSON.stringify({metadata:x.metadata,vulnerabilities:x.vulnerabilities},null,2))'
+          exit 0
+      - name: Full dependency audit
+        shell: bash
+        run: |
+          set +e
+          npm audit --json > full-audit.json
+          code=$?
+          echo "full_audit_exit=$code" >> "$GITHUB_STEP_SUMMARY"
+          node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync("full-audit.json","utf8")); console.log(JSON.stringify({metadata:x.metadata,vulnerabilities:x.vulnerabilities},null,2))'
+          exit 0
+      - name: Dependency tree
+        shell: bash
+        run: |
+          npm ls --all > dependency-tree.txt 2>&1 || true
+          cat dependency-tree.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dependency-security-audit
+          path: |
+            production-audit.json
+            full-audit.json
+            dependency-tree.txt
+          if-no-files-found: error
