@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "commandId": "example-replace-image-001",
+  "command": "replace_asset",
+  "issuedAt": "2026-09-07T00:00:00Z",
+  "context": {
+    "ruleVersion": "example-v1",
+    "targetSite": "example-site",
+    "requiresAssetIntake": true
+  },
+  "payload": {
+    "contentType": "news",
+    "contentId": "REPLACE_WITH_CONTENT_ID",
+    "expectedVersion": 1,
+    "role": "hero",
+    "position": 0,
+    "reference": {
+      "provider": "google_drive",
+      "providerAssetId": "REPLACE_WITH_DRIVE_FILE_ID",
+      "intendedRole": "hero",
+      "alt": "Example hero image",
+      "metadata": {}
+    }
+  }
+}
