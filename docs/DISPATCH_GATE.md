@@ -37,13 +37,50 @@ unless all of them pass.
 | --- | --- | --- | --- |
 | 1 | Schema | none | Envelope or payload that does not match the current Zod contracts in `src/server` |
 | 2 | Rule version | none | `context.ruleVersion` differing from this installation's rule version |
-| 3 | Preflight | authenticated read | Missing target, or `expectedVersion` no longer matching current state |
-| 4 | Asset Intake readiness | authenticated read | An image-bearing command when the provider is not usable |
+| 3 | Target site | none | A command written for a different installation |
+| 4 | Asset Intake readiness | authenticated read | A command carrying an intake source whose provider is not usable |
+| 5 | Preflight | authenticated read | Missing target, or `expectedVersion` no longer matching current state |
 
-Gates 1 and 2 are purely local: they need no credentials and no network, so a
-malformed command never reaches the installation at all.
+Gates 1 to 3 are purely local: they need no credentials and no network, so a
+misaddressed or malformed command never reaches the installation at all.
 
-Gate 4 runs only when the command sets `context.requiresAssetIntake: true`.
+### Gate 3: the command must name this installation
+
+`context.targetSite` is **required** and must equal `site.id` in
+`config/site-profile.json`. An absent value is an unaddressed command, not a
+wildcard.
+
+The Worker does not check this field, and the endpoint comes from this
+repository's own configuration — so without this gate, a command prepared for
+one customer, run from the wrong repository or workflow, would be applied to
+whichever site the workflow points at.
+
+### Gate 4: derived from the payload, not declared by the caller
+
+`context.requiresAssetIntake` is optional caller-supplied metadata, so it is not
+what decides whether readiness runs. The requirement is read out of the
+validated payload:
+
+| Command | Intake source | Provider from |
+| --- | --- | --- |
+| `create_asset` | always | `payload.descriptor.sourceProvider` |
+| `import_wordpress_asset` | always | the command itself (`wordpress`) |
+| `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset` | only when `payload.reference` is present | `payload.reference.provider` |
+
+A reference-bearing command may instead carry a canonical `assetId` that is
+already inside the Asset Engine; that needs no intake.
+
+The flag is then cross-checked against the derived answer, and a contradiction
+in **either** direction is rejected (`ASSET_INTAKE_FLAG_MISSING`,
+`ASSET_INTAKE_FLAG_UNEXPECTED`) rather than resolved silently.
+
+**Readiness is provider-specific.** `/api/control/readiness/asset-intake/`
+evaluates Google Drive credentials and the Drive intake folder — nothing else.
+Treating its verdict as evidence for another provider would assert something the
+application never checked, so only `google_drive` has a canonical mechanism
+here. Any other provider fails closed with
+`ASSET_INTAKE_READINESS_UNSUPPORTED`. Adding a provider means implementing a
+real readiness check for it and registering it, never reusing Drive's.
 
 ### The preflight receipt
 
@@ -61,6 +98,30 @@ so attaching the receipt cannot change the digest it attests.
 
 Some commands — currently `import_wordpress_asset` — are refused by the Worker
 outright without a receipt (`COMMAND_PREFLIGHT_REQUIRED`).
+
+## Recovering a lost dispatch response
+
+Commands are immutable and idempotent by `commandId`, but a dispatch can commit
+its mutation and still lose the response — a dropped connection, a cancelled
+run. Re-running the same command then meets a difficulty: the mutation already
+happened, so its `expectedVersion` is now legitimately stale, and preflight
+would report a conflict for a command that in fact succeeded.
+
+Before the state gates, the gate therefore asks the installation whether this
+exact `commandId` already completed, via `GET /api/control/commands/{commandId}`
+(scope `command:read`):
+
+- **Recorded as successful** → the state gates are skipped and the command is
+  re-sent. The Worker resolves idempotency by `commandId` before any contract
+  gate and returns the original result. No second mutation. If the Worker
+  answers non-idempotently, the gate stops (`REPLAY_NOT_IDEMPOTENT`) rather than
+  risk one.
+- **Recorded as failed, or not known** → ordinary work. Every gate runs.
+- **Lookup itself fails** → fail closed. Not knowing whether a command ran is
+  not the same as knowing it did not.
+
+This is not a general preflight bypass: only a `commandId` the installation has
+already recorded as successful takes this path.
 
 ## Running it
 
@@ -91,8 +152,9 @@ Configured on the `site-operations` environment of the repository.
 | Secret | `COMMAND_HMAC_SECRET` | Signs the dispatch request. Must equal the Worker's secret of the same name |
 | Secret | `CONTROL_READ_HMAC_SECRET` | Signs the preflight and readiness reads |
 
-The Worker's `CONTROL_READ_SCOPES` must include `command:preflight` for gate 3
-and `intake:read` for gate 4. The shipped `wrangler.jsonc` grants both.
+The Worker's `CONTROL_READ_SCOPES` must include `command:preflight` for gate 5,
+`intake:read` for gate 4, and `command:read` for the replay lookup. The shipped
+`wrangler.jsonc` grants all three.
 
 Missing configuration is not a warning: the gate exits non-zero rather than
 attempting an unauthenticated request.

@@ -27,7 +27,7 @@
     "SITE_ORIGIN": "https://example.com",
     "SITE_TIMEZONE": "UTC",
     "COMMAND_TRUSTED_ACTOR": "github-actions",
-    "CONTROL_READ_SCOPES": "intake:read,command:preflight",
+    "CONTROL_READ_SCOPES": "intake:read,command:preflight,command:read",
     "COMMAND_TRUSTED_SCOPES": "content:write,content:archive,content:rollback,asset:write,product:create,product:update,product:archive,product:asset,product:rollback,page:write,page:structure,page:rollback,page:item:write"
   }
 }

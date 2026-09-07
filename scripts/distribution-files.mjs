@@ -96,6 +96,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'schemas/create-news.schema.json',
   'src/env.d.ts',
   'scripts/dispatch-command.mjs',
+  'src/pages/api/control/commands/[commandId].ts',
   'src/server/command-schema.ts',
   'src/server/commands.ts',
   'tsconfig.json',
