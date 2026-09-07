@@ -5,5 +5,5 @@
     "baseUrl": ".",
     "paths": {"@/*": ["src/*"]}
   },
-  "exclude": ["scripts/public-oss/templates/**"]
+  "exclude": ["dist", "node_modules"]
 }

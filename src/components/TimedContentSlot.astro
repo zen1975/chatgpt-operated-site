@@ -8,7 +8,7 @@ const item = await getActiveTimedContent(placement);
   <aside class="notice" data-ends-at={item.ends_at ?? undefined}>
     {item.title && <strong>{item.title}</strong>}
     {item.body && <span> {item.body}</span>}
-    {item.link_url && <a href={item.link_url}> {item.link_label || '詳しく見る'}</a>}
+    {item.link_url && <a href={item.link_url}> {item.link_label || 'Learn more'}</a>}
   </aside>
 )}
 {item?.ends_at && (

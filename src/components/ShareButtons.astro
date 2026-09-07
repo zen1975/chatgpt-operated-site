@@ -3,11 +3,11 @@ interface Props { title: string; url: string; }
 const { title, url } = Astro.props;
 const encTitle = encodeURIComponent(title); const encUrl = encodeURIComponent(url);
 ---
-<div class="share-buttons" aria-label="この記事を共有">
+<div class="share-buttons" aria-label="Share this article">
   <a href={`https://twitter.com/intent/tweet?text=${encTitle}&url=${encUrl}`} target="_blank" rel="noopener">X</a>
   <a href={`https://www.facebook.com/sharer/sharer.php?u=${encUrl}`} target="_blank" rel="noopener">Facebook</a>
   <a href={`https://social-plugins.line.me/lineit/share?url=${encUrl}`} target="_blank" rel="noopener">LINE</a>
-  <button type="button" data-copy-url={url}>URLをコピー</button>
+  <button type="button" data-copy-url={url}>Copy URL</button>
 </div>
 <script>
   document.querySelectorAll('[data-copy-url]').forEach((el) => el.addEventListener('click', async () => {

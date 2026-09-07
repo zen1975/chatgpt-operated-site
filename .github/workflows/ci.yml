@@ -18,5 +18,16 @@ jobs:
         with:
           node-version: 22.23.2
           cache: npm
+
+      # The committed lockfile is the install contract for third parties, so CI
+      # installs exactly the way a clean clone does.
       - run: npm ci
-      - run: npm run build
+
+      - name: Build
+        run: npm run build
+
+      # Contract checks are the reason CI exists: a green build only proves the
+      # site compiles, not that the shipped schemas, examples, migrations, and
+      # configuration still agree with the implementation.
+      - name: Contract checks
+        run: npm run test:contract
