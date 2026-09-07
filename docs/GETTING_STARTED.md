@@ -16,11 +16,11 @@ The included Example Company site is intentionally simple. Treat it like a neutr
 ## Install and verify locally
 
 ```bash
-npm ci
+npm install
 npm run build
 ```
 
-The committed `package-lock.json` is the install contract. Do not regenerate dependencies as part of ordinary CI or deployment.
+This starter intentionally keeps the install path simple for implementers. `package.json` pins the supported direct dependency versions. If your implementation needs a committed lockfile, generate and commit one in your own project after you choose the versions you want to maintain.
 
 For local Cloudflare development, replace the placeholder resource identifiers in `wrangler.jsonc` with resources belonging to the installation. Do not commit real secrets.
 
@@ -61,14 +61,13 @@ Verify at least:
 
 ```text
 clean clone
-  -> npm ci
+  -> npm install
   -> npm run build
-  -> provision disposable resources
+  -> provision resources
   -> run migrations
-  -> verify ordinary text/content operation
-  -> verify image-bearing operation
-  -> verify rendered public result
-  -> verify failure paths do not bypass the command boundary
+  -> verify one ordinary text/content operation
+  -> verify one image-bearing operation if you use Asset Intake
+  -> verify the rendered public result
 ```
 
 The client-facing goal is simple: once provisioning is complete, the client should be able to use ChatGPT for routine website updates without operating the infrastructure directly.
