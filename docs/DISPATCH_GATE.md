@@ -231,7 +231,44 @@ sequence" -- so the fence is a statement that *fails*. It writes 1 into
 `job_lease_fence.holds_lease` when the caller still holds the lease and 0 when
 it does not, and a CHECK constraint rejects 0.
 
-Every mutation batch runs through `fencedBatch`, which puts that statement
+### The version guard is a fence too
+
+An optimistic version check used to be an affected-row count read after the
+batch. That is not a safety boundary: a guarded UPDATE matching zero rows is not
+an error, so D1 commits the revision, the projection and the success transition
+and the check only discovers afterwards that the mutation it guarded never
+applied.
+
+`migrations/0009` adds `command_version_fence`, the same shape as the lease
+fence: `matches` is 1 when the guarded row is still at the expected version and
+0 when it is not, and a CHECK constraint rejects 0. Every optimistic-version
+mutation -- content, product, page, and page sections -- supplies its guard to
+`fencedBatch`, which emits one fence per guard. The table and predicate come
+from a closed map in `job-store.ts`, never from a payload.
+
+The batch order is therefore:
+
+```text
+lease fence -> version fence(s) -> intake registration -> domain mutation
+  -> revision -> the sole success transition
+```
+
+### Results are addressed by name
+
+Batch results are never read by position. A batch is assembled from several
+sources -- fences, optional intake registration, the mutation, a revision, the
+completion -- so a fixed index silently means something different as soon as any
+of them changes length. That happened twice: adding the lease fence shifted the
+guarded update from index 0 to 1, and adding intake registration shifted it
+again, at which point an intake statement's one-row result could be mistaken for
+a successful version update.
+
+`fencedBatch` takes `NamedStatement`s and returns results addressable only by
+name. The type has no index signature, so positional access does not compile,
+and contract tests fail the build on any `batch[n]`/`results[n]` pattern or on a
+cast that would reopen one.
+
+Every mutation batch runs through `fencedBatch`, which puts the fences
 first. A batch whose lease has been lost fails on its first statement, and the
 whole sequence rolls back: no content, taxonomy, asset, product, page, revision
 or projection write from a superseded attempt ever commits. Handlers additionally

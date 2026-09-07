@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { CommandError } from './errors';
 import { uuid } from '../util';
-import { successStatement, fencedBatch, assertOwnedRowAffected, type CommandExecution } from '../control-plane/job-store';
+import { successStatement, fencedBatch, named, assertOwnedRowAffected, SUCCESS_STATEMENT_NAME, type CommandExecution } from '../control-plane/job-store';
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 
@@ -240,7 +240,10 @@ export async function prepareAssetIntake(input: unknown, bytes: AssetBinary, exe
  */
 export async function ingestAssetAsRootCommand(input: unknown, bytes: AssetBinary, execution: CommandExecution) {
   const { result, statements } = await prepareAssetIntake(input, bytes, execution);
-  const batch = await fencedBatch(execution, [...statements, successStatement(execution, result)]);
-  assertOwnedRowAffected(execution, batch[batch.length - 1]);
+  const results = await fencedBatch(execution, [
+    ...statements.map((statement, index) => named(`intake-${index}`, statement)),
+    named(SUCCESS_STATEMENT_NAME, successStatement(execution, result))
+  ]);
+  assertOwnedRowAffected(execution, results);
   return result;
 }

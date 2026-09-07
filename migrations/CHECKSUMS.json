@@ -8,6 +8,7 @@
     "0005_unified_content_projection.sql": "sha256:0d7c6845efca01c4c4fba104123391b4b0f98bafc6f7b4c0f37dfb1b29bb9de0",
     "0006_job_command_digest.sql": "sha256:8efb6d3a8c8bda2723c71dd860e4d4f25dc2ec2c68f3f7e8ea33734e00112749",
     "0007_job_lease.sql": "sha256:a0c25995e5b19f068bca8fded57cad4cfb970815feffaaac65dbbd9e734be730",
-    "0008_job_lease_fence.sql": "sha256:b6460175c6d55fa403c0e55fdfd4df67b4e0952ce1af889fddb605aaf7942ba6"
+    "0008_job_lease_fence.sql": "sha256:b6460175c6d55fa403c0e55fdfd4df67b4e0952ce1af889fddb605aaf7942ba6",
+    "0009_command_version_fence.sql": "sha256:82e27466f1a85eef13105581fed2019bf40fe9e622641e45d49ea8618636f141"
   }
 }

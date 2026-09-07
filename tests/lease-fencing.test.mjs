@@ -246,6 +246,10 @@ test('lease ownership is never recovered by commandId lookup', async () => {
 
 test('the fence is the first statement of every fenced batch', async () => {
   const source = await readFile(path.join(repoRoot, 'src/server/control-plane/job-store.ts'), 'utf8');
-  assert.match(source, /env\.DB\.batch\(\[fenceStatement\(execution\), \.\.\.statements\]/, 'the fence must precede every mutation in the batch');
+  // The lease fence heads the prefix, the version fences follow it, and the
+  // caller's statements come last -- addressed by name, never by position.
+  assert.match(source, /const prefix: NamedStatement\[\] = \[named\('lease-fence', leaseFenceStatement\(execution, now\)\)\]/, 'the lease fence must head every fenced batch');
+  assert.match(source, /prefix\.push\(named\(`version-fence:\$\{guard\.subject\}`/, 'version fences follow the lease fence');
+  assert.match(source, /const all = \[\.\.\.prefix, \.\.\.statements\]/, 'caller statements follow both fences');
   assert.match(source, /holds_lease/, 'the fence must be expressed as a constraint that fails');
 });
