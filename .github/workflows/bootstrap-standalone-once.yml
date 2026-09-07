@@ -30,39 +30,10 @@ jobs:
       - name: Standalone build
         run: npm run build
 
-      - name: Replace bootstrap workflow with permanent CI
-        run: |
-          mkdir -p .github/workflows
-          cat > .github/workflows/ci.yml <<'YAML'
-          name: CI
-
-          on:
-            push:
-              branches: [main]
-            pull_request:
-              branches: [main]
-
-          permissions:
-            contents: read
-
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-node@v4
-                  with:
-                    node-version: 22.23.2
-                    cache: npm
-                - run: npm ci
-                - run: npm run build
-          YAML
-          rm -f .github/workflows/bootstrap-standalone-once.yml
-
-      - name: Commit accepted standalone baseline to isolated branch
+      - name: Commit generated lockfile to isolated branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package-lock.json .github/workflows/ci.yml .github/workflows/bootstrap-standalone-once.yml
-          git commit -m 'build: establish standalone OSS baseline'
+          git add package-lock.json
+          git commit -m 'build: add standalone package lock'
           git push origin HEAD:dev/standalone-baseline-20260907
