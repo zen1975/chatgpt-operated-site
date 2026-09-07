@@ -8,6 +8,7 @@
     "build": "astro check && astro build",
     "test": "npm run test:contract",
     "test:contract": "node --test \"tests/**/*.test.mjs\"",
+    "test:migrations:base": "node scripts/check-migration-immutability.mjs",
     "verify": "npm run build && npm run test:contract",
     "schemas:generate": "node scripts/generate-schemas.mjs",
     "migrations:checksums": "node scripts/migration-checksums.mjs",
