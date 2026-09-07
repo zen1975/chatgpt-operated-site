@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "commandId": "example-create-news-001",
+  "command": "create_news",
+  "issuedAt": "2026-09-07T00:00:00Z",
+  "context": {
+    "ruleVersion": "example-v1",
+    "targetSite": "example-site"
+  },
+  "payload": {
+    "title": "Example company update",
+    "slug": "example-company-update",
+    "excerpt": "A minimal reference command for implementers.",
+    "contentType": "news",
+    "templateProfile": "news-default",
+    "blocks": [
+      {
+        "type": "paragraph",
+        "content": "This example shows the smallest useful path from a ChatGPT request to a validated site operation."
+      }
+    ]
+  }
+}
