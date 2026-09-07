@@ -8,6 +8,15 @@ The repository includes a simple English Astro corporate website together with t
 
 **The client uses ChatGPT. The agency owns everything underneath.**
 
+## Quick start
+
+```bash
+npm ci
+npm run build
+```
+
+Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance.
+
 ## What is included
 
 - A simple English Astro target site with neutral mock text and mock assets
@@ -15,7 +24,7 @@ The repository includes a simple English Astro corporate website together with t
 - Controlled Command schemas and deterministic handlers
 - GitHub-based operation and dispatch flow
 - Content, image, page-composition, SEO, and projection foundations
-- Examples and documentation for extending the operation model
+- Documentation for extending the operation model
 
 ## The included Astro site is a reference implementation
 
@@ -66,7 +75,7 @@ A configured client should be able to make ordinary requests such as:
 "Update the SEO description for the About page."
 ```
 
-The client should not need to understand the implementation details behind those operations.
+The client should not need to understand the implementation details behind those operations. See [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) for the operating model.
 
 ## Architecture
 
@@ -81,6 +90,13 @@ Client
 ```
 
 **ChatGPT is the interface. Everything else is infrastructure.**
+
+## Documentation
+
+- [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
+- [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
+- [`docs/EXTENDING_SITE_OPERATIONS.md`](docs/EXTENDING_SITE_OPERATIONS.md) — adding new controlled site operations
+- [`AGENTS.md`](AGENTS.md) — operating contract for coding/operation agents
 
 ## Project status
 
