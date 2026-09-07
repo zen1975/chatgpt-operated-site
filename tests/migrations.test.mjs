@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { repoRoot } from '../scripts/load-command-contracts.mjs';
+import { repoRoot } from '../scripts/repo-root.mjs';
+import { computeChecksums, serialize, MANIFEST_PATH } from '../scripts/migration-checksums.mjs';
 
 // D1 is SQLite. Applying the committed migrations to an empty in-process
 // SQLite database is the cheapest reproduction of "a third party provisions a
@@ -53,4 +54,25 @@ test('migrations are append-only: no destructive statements', async () => {
     assert.doesNotMatch(stripped, /\bDROP\s+TABLE\b(?!\s+IF\s+EXISTS\s+_)/i, `${name} drops a table; migrations are documented as append-only`);
     assert.doesNotMatch(stripped, /\bDELETE\s+FROM\b/i, `${name} deletes rows; migrations are documented as append-only`);
   }
+});
+
+// Rejecting destructive statements is not immutability. A migration edited with
+// entirely non-destructive SQL -- a column added to 0001 rather than a new 0006
+// -- passes every other check here, yet existing installations have already run
+// that file and will never re-run it, so they diverge permanently from a
+// database built fresh. The committed digests make such an edit impossible to
+// land silently.
+test('the migration checksum manifest matches the committed migrations', async () => {
+  const committed = await readFile(path.join(repoRoot, MANIFEST_PATH), 'utf8');
+  assert.equal(
+    committed,
+    serialize(await computeChecksums()),
+    `${MANIFEST_PATH} is stale. If you added a migration, run \`npm run migrations:checksums\` and commit it. If the digest of an EXISTING migration changed, an already-applied file was edited: revert it and add a new migration instead.`
+  );
+});
+
+test('the checksum manifest covers exactly the committed migrations', async () => {
+  const { checksums } = JSON.parse(await readFile(path.join(repoRoot, MANIFEST_PATH), 'utf8'));
+  assert.deepEqual(Object.keys(checksums).sort(), files, 'every migration must be pinned, and the manifest must not pin files that no longer exist');
+  for (const digest of Object.values(checksums)) assert.match(digest, /^sha256:[a-f0-9]{64}$/);
 });

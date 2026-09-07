@@ -51,9 +51,13 @@ test:contract` runs the contract suite in `tests/`, which asserts:
   Zod can express — required, type, enum, format, pattern, limits, uniqueItems,
   defaults, `additionalProperties` — is compared, not just property names
 - the migrations in `migrations/` are sequential, append-only, and apply in
-  order to a brand-new database
+  order to a brand-new database, and their committed digests still match — an
+  already-applied migration must never be edited, even non-destructively, or
+  existing installations diverge from fresh ones (add a new migration and run
+  `npm run migrations:checksums`)
 - no tracked file contains credential-shaped content, private-upstream
-  identifiers, or non-English content
+  identifiers, or non-English content, and each shipped example still carries
+  placeholders in its declared installation-specific fields
 - the committed Cloudflare identifiers are still placeholders
 - every environment name `src/` actually reads — extracted from the code, not
   listed by hand — is typed in `src/env.d.ts` and documented in
