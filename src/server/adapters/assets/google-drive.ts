@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ingestAsset } from '../../core/assets';
+import type { CommandExecution } from '../../control-plane/job-store';
 import { CommandError } from '../../core/errors';
 import { validateFetchedAsset, responseBytes, type AssetMimeType } from './intake-common';
 
@@ -59,9 +60,9 @@ export async function fetchGoogleDriveAsset(referenceInput: unknown, options: { 
   return fetched;
 }
 
-export async function ingestGoogleDriveAsset(referenceInput: unknown, options: { accessToken: string; fetchImpl?: FetchLike; ingest?: typeof ingestAsset }, commandId: string) {
+export async function ingestGoogleDriveAsset(referenceInput: unknown, options: { accessToken: string; fetchImpl?: FetchLike; ingest?: typeof ingestAsset }, execution: CommandExecution) {
   const fetched = await fetchGoogleDriveAsset(referenceInput, options);
-  return (options.ingest ?? ingestAsset)(fetched.descriptor, fetched.bytes, commandId);
+  return (options.ingest ?? ingestAsset)(fetched.descriptor, fetched.bytes, execution);
 }
 
 export const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';

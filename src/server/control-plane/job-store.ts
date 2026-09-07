@@ -48,7 +48,40 @@ const leaseExpiry = (from = Date.now()) => new Date(from + LEASE_DURATION_MS).to
  * test is self-consistent -- removing a lease condition from the implementation
  * would then leave every test green.
  */
+/**
+ * Who is executing this command, and under which lease.
+ *
+ * Passed explicitly from the claim all the way through the handlers to the
+ * completion write. It used to live in a module-global map keyed by commandId,
+ * which is wrong in exactly the case leases exist for: an attempt that outlives
+ * its lease and the retry that reclaimed it can run in the same isolate, and
+ * the retry would overwrite the map entry -- handing the superseded attempt the
+ * retry's token, and letting its `finally` delete the retry's lease. A token
+ * recovered by looking up a commandId is not proof of ownership.
+ */
+export type CommandExecution = {
+  readonly commandId: string;
+  readonly commandType: string;
+  readonly commandDigest: string;
+  readonly leaseToken: string;
+  readonly leaseExpiresAt: string;
+};
+
 export const JOB_SQL = {
+  /**
+   * Proves the caller still owns the lease, as a statement that *fails* when it
+   * does not.
+   *
+   * A completion conditioned on the lease token merely matches zero rows when
+   * the lease is gone, and zero rows is not an error, so it cannot abort a
+   * batch. This writes 1 when the lease is held and 0 when it is not, and
+   * job_lease_fence.holds_lease has a CHECK constraint that rejects 0 -- which
+   * D1 surfaces as a failed statement, rolling back the entire batch.
+   */
+  fence:
+    `INSERT INTO job_lease_fence (command_id, lease_token, holds_lease, checked_at)
+     VALUES (?, ?, (SELECT COUNT(*) FROM jobs WHERE command_id=? AND lease_token=? AND status='running'), ?)
+     ON CONFLICT(command_id) DO UPDATE SET lease_token=excluded.lease_token, holds_lease=excluded.holds_lease, checked_at=excluded.checked_at`,
   claim:
     `INSERT INTO jobs (id,command_id,command_type,status,attempt_count,command_digest,created_at,started_at,lease_token,lease_expires_at)
      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO NOTHING`,
@@ -86,25 +119,14 @@ export const guardedSuccessSql = (table: 'news') =>
  * Bind this commandId to this command. First writer wins: DO NOTHING, never
  * DO UPDATE, so an id already claimed by another command is not taken over.
  */
-/**
- * The lease this invocation holds, keyed by commandId.
- *
- * Held per invocation so handlers -- which complete inside their own D1 batch --
- * do not each have to thread the token through. A superseded attempt keeps its
- * old token here, which is exactly why its completion is refused.
- */
-const activeLeases = new Map<string, string>();
-
-export const currentLeaseToken = (commandId: string) => activeLeases.get(commandId) ?? '';
-export const setLeaseToken = (commandId: string, leaseToken: string) => { activeLeases.set(commandId, leaseToken); };
-export const clearLeaseToken = (commandId: string) => { activeLeases.delete(commandId); };
-
 export async function claimCommand(commandId: string, command: string, digest: string) {
   const claimId = uuid();
   const leaseToken = uuid();
   const now = new Date().toISOString();
-  await env.DB.prepare(JOB_SQL.claim).bind(claimId, commandId, command, 'running', 1, digest, now, now, leaseToken, leaseExpiry()).run();
-  return { claimId, leaseToken, stored: await readJob(commandId) };
+  const leaseExpiresAt = leaseExpiry();
+  await env.DB.prepare(JOB_SQL.claim).bind(claimId, commandId, command, 'running', 1, digest, now, now, leaseToken, leaseExpiresAt).run();
+  const execution: CommandExecution = { commandId, commandType: command, commandDigest: digest, leaseToken, leaseExpiresAt };
+  return { claimId, execution, stored: await readJob(commandId) };
 }
 
 export async function readJob(commandId: string) {
@@ -116,15 +138,16 @@ export async function readJob(commandId: string) {
  * stored digest and on the row still being failed, so it can neither rewrite an
  * identity binding nor start a second concurrent execution.
  */
-export async function reopenFailedJob(commandId: string, command: string, digest: string) {
+export async function reopenFailedJob(commandId: string, command: string, digest: string): Promise<CommandExecution> {
   const leaseToken = uuid();
   const now = new Date().toISOString();
-  const outcome = await env.DB.prepare(JOB_SQL.reopenFailed).bind(now, leaseToken, leaseExpiry(), commandId, digest, command).run();
+  const leaseExpiresAt = leaseExpiry();
+  const outcome = await env.DB.prepare(JOB_SQL.reopenFailed).bind(now, leaseToken, leaseExpiresAt, commandId, digest, command).run();
 
   if ((outcome as { meta?: { changes?: number } }).meta?.changes === 0) {
     throw new CommandError('CONFLICT', 'COMMAND_IN_PROGRESS', 'This command was picked up by another run. Wait for it to finish rather than running it a second time.', true, { commandId });
   }
-  return leaseToken;
+  return { commandId, commandType: command, commandDigest: digest, leaseToken, leaseExpiresAt };
 }
 
 /**
@@ -135,59 +158,115 @@ export async function reopenFailedJob(commandId: string, command: string, digest
  * however old the lease; and two reclaimers race on the same statement, so only
  * one wins.
  */
-export async function reclaimExpiredLease(commandId: string, command: string, digest: string) {
+export async function reclaimExpiredLease(commandId: string, command: string, digest: string): Promise<CommandExecution> {
   const leaseToken = uuid();
   const now = new Date();
-  const outcome = await env.DB.prepare(JOB_SQL.reclaimExpired).bind(now.toISOString(), leaseToken, leaseExpiry(now.getTime()), commandId, digest, command, now.toISOString()).run();
+  const leaseExpiresAt = leaseExpiry(now.getTime());
+  const outcome = await env.DB.prepare(JOB_SQL.reclaimExpired).bind(now.toISOString(), leaseToken, leaseExpiresAt, commandId, digest, command, now.toISOString()).run();
 
   if ((outcome as { meta?: { changes?: number } }).meta?.changes === 0) {
     throw new CommandError('CONFLICT', 'COMMAND_IN_PROGRESS', 'This command is already executing under a live lease. Wait for it to finish rather than running it a second time.', true, { commandId });
   }
-  return leaseToken;
+  return { commandId, commandType: command, commandDigest: digest, leaseToken, leaseExpiresAt };
 }
 
 /** Extend the lease of an attempt still in progress. */
-export async function renewLease(commandId: string, leaseToken: string) {
-  const outcome = await env.DB.prepare(JOB_SQL.renewLease).bind(leaseExpiry(), commandId, leaseToken).run();
-  return (outcome as { meta?: { changes?: number } }).meta?.changes !== 0;
+export async function renewLease(execution: CommandExecution): Promise<CommandExecution> {
+  const leaseExpiresAt = leaseExpiry();
+  const outcome = await env.DB.prepare(JOB_SQL.renewLease).bind(leaseExpiresAt, execution.commandId, execution.leaseToken).run();
+  if ((outcome as { meta?: { changes?: number } }).meta?.changes === 0) {
+    throw new CommandError('CONFLICT', 'COMMAND_LEASE_LOST', 'This attempt no longer holds the command lease; another attempt has taken over.', false, { commandId: execution.commandId });
+  }
+  return { ...execution, leaseExpiresAt };
 }
 
 /**
  * The success statement, for handlers that complete inside a D1 batch so the
  * job lands in the same transaction as the mutation it records.
  */
-export function successStatement(commandId: string, command: string, result: unknown, now = new Date().toISOString(), leaseToken = currentLeaseToken(commandId)) {
-  return env.DB.prepare(JOB_SQL.success).bind(uuid(), commandId, command, 'success', 1, JSON.stringify(result), now, now, leaseToken);
+/** The fence, as a statement, for placing at the head of a mutation batch. */
+export function fenceStatement(execution: CommandExecution, now = new Date().toISOString()) {
+  return env.DB.prepare(JOB_SQL.fence).bind(execution.commandId, execution.leaseToken, execution.commandId, execution.leaseToken, now);
 }
 
 /**
- * The success statement, conditioned on the mutation it records having actually
- * landed. Used where the job must not be written unless the guarded row moved
- * to the expected version.
+ * Run a mutation batch fenced by the caller's lease.
+ *
+ * The fence goes first, so a batch whose lease has been lost fails on its very
+ * first statement and D1 rolls the whole sequence back: no content, taxonomy,
+ * asset, product, page, revision or projection write from a superseded attempt
+ * ever commits. Handlers call this instead of env.DB.batch, and a contract test
+ * fails the build if one goes around it.
+ */
+export async function fencedBatch(execution: CommandExecution, statements: unknown[]) {
+  try {
+    return await env.DB.batch([fenceStatement(execution), ...statements] as never[]);
+  } catch (error) {
+    if (isLeaseFenceViolation(error)) {
+      throw new CommandError('CONFLICT', 'COMMAND_LEASE_LOST', 'This attempt no longer holds the command lease; another attempt has taken over, so its changes were not applied.', false, { commandId: execution.commandId });
+    }
+    throw error;
+  }
+}
+
+const isLeaseFenceViolation = (error: unknown) => /holds_lease|job_lease_fence/i.test(error instanceof Error ? error.message : String(error));
+
+/**
+ * The success statement. Carries the caller's own lease token -- never one
+ * recovered by looking up the commandId -- so a superseded attempt cannot
+ * complete as the current owner.
+ */
+export function successStatement(execution: CommandExecution, result: unknown, now = new Date().toISOString()) {
+  return env.DB.prepare(JOB_SQL.success).bind(
+    uuid(), execution.commandId, execution.commandType, 'success', 1, JSON.stringify(result), now, now, execution.leaseToken
+  );
+}
+
+/**
+ * The success statement, additionally conditioned on the mutation it records
+ * having landed at the expected version.
  */
 export function guardedSuccessStatement(
-  commandId: string,
-  command: string,
+  execution: CommandExecution,
   result: unknown,
   guard: { table: 'news'; id: string; contentType: string; version: number },
-  now = new Date().toISOString(),
-  leaseToken = currentLeaseToken(commandId)
+  now = new Date().toISOString()
 ) {
-  return env.DB.prepare(guardedSuccessSql(guard.table)).bind(uuid(), commandId, command, 'success', 1, JSON.stringify(result), now, now, guard.id, guard.contentType, guard.version, leaseToken);
+  return env.DB.prepare(guardedSuccessSql(guard.table)).bind(
+    uuid(), execution.commandId, execution.commandType, 'success', 1, JSON.stringify(result), now, now,
+    guard.id, guard.contentType, guard.version, execution.leaseToken
+  );
 }
 
-export async function recordSuccess(commandId: string, command: string, result: unknown, leaseToken?: string) {
-  await successStatement(commandId, command, result, new Date().toISOString(), leaseToken ?? currentLeaseToken(commandId)).run();
+/** Terminal success, for handlers that complete outside a batch. */
+export async function recordSuccess(execution: CommandExecution, result: unknown) {
+  const outcome = await successStatement(execution, result).run();
+  assertOwnedRowAffected(execution, outcome);
 }
 
 /**
- * Terminal failure. Every path that established `running` must reach this, or
- * the row stays running forever and every later retry of that immutable command
- * is refused as already in progress.
+ * The final transition must affect exactly the one row this lease owns. Zero
+ * rows means the lease was lost between the fence and the completion.
  */
-export async function recordFailure(commandId: string, command: string, error: unknown, leaseToken = currentLeaseToken(commandId)) {
+export function assertOwnedRowAffected(execution: CommandExecution, outcome: unknown) {
+  const changes = (outcome as { meta?: { changes?: number } })?.meta?.changes;
+  if (changes === 0) {
+    throw new CommandError('CONFLICT', 'COMMAND_LEASE_LOST', 'This attempt no longer holds the command lease, so its completion was not recorded.', false, { commandId: execution.commandId });
+  }
+  if (typeof changes === 'number' && changes > 1) {
+    throw new CommandError('FATAL_SYSTEM_ERROR', 'COMMAND_COMPLETION_AMBIGUOUS', 'The completion affected more than one job row.', false, { commandId: execution.commandId, changes });
+  }
+}
+
+/**
+ * Terminal failure, under this attempt's own lease. A superseded attempt's
+ * failure is not recorded, because the job no longer belongs to it.
+ */
+export async function recordFailure(execution: CommandExecution, error: unknown) {
   const detail = error as { type?: string; code?: string };
   const message = error instanceof Error ? error.message : error ? String(error) : null;
   const now = new Date().toISOString();
-  await env.DB.prepare(JOB_SQL.failure).bind(uuid(), commandId, command, 'failed', 1, detail?.type || null, detail?.code || null, message, now, now, leaseToken).run();
+  await env.DB.prepare(JOB_SQL.failure).bind(
+    uuid(), execution.commandId, execution.commandType, 'failed', 1, detail?.type || null, detail?.code || null, message, now, now, execution.leaseToken
+  ).run();
 }

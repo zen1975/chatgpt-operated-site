@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ingestAsset } from '../../core/assets';
+import type { CommandExecution } from '../../control-plane/job-store';
 import { CommandError } from '../../core/errors';
 import {
   AssetMime,
@@ -246,7 +247,7 @@ export async function ingestWordPressAsset(
     fetchImpl?: FetchLike;
     ingest?: typeof ingestAsset;
   },
-  commandId: string
+  execution: CommandExecution
 ) {
   const fetched =
     await fetchWordPressAsset(
@@ -257,6 +258,6 @@ export async function ingestWordPressAsset(
   return (options.ingest ?? ingestAsset)(
     fetched.descriptor,
     fetched.bytes,
-    commandId
+    execution
   );
 }
