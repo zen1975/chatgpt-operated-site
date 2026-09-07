@@ -152,3 +152,9 @@ test('executeCommand enforces the site boundary independently of Actions', async
     { code: 'COMMAND_TARGET_SITE_MISMATCH' }
   );
 });
+
+test('the emergency ingress uses the same canonical site identity', async () => {
+  const source = await readFile(path.join(repoRoot, 'src/pages/api/emergency/news.ts'), 'utf8');
+  assert.match(source, /targetSite:\s*SITE_ID/);
+  assert.doesNotMatch(source, /targetSite:\s*['\"]emergency-sheet['\"]/);
+});

@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { executeCommand } from '@/server/commands';
 import { RULE_VERSION } from '@/server/rule-version';
+import { SITE_ID } from '@/server/site-identity';
 
 const EmergencyNewsInput = z.object({
   requestId: z.string().min(8).max(120).regex(/^[A-Za-z0-9._-]+$/),
@@ -98,7 +99,7 @@ export const POST: APIRoute = async ({ request }) => {
       issuedAt: timestamp,
       context: {
         ruleVersion: RULE_VERSION,
-        targetSite: 'emergency-sheet'
+        targetSite: SITE_ID
       },
       payload: {
         title: input.title,
