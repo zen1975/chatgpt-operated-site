@@ -32,6 +32,11 @@ Client request
 
 The exact command payload must match the current schema in `src/server/command-schema.ts` and the relevant capability policy.
 
+The validation and dispatch stage is implemented by the **Dispatch site command**
+workflow. See [`EXTENDING_SITE_OPERATIONS.md`](EXTENDING_SITE_OPERATIONS.md) for
+adding operations and [`DISPATCH_GATE.md`](DISPATCH_GATE.md) for what that stage
+checks before anything is written.
+
 ## Images
 
 For an operation that needs a new image, the client can attach the image in the ChatGPT interaction supported by the configured installation.

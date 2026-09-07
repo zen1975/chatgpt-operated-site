@@ -1,0 +1,97 @@
+# The GitHub Actions dispatch gate.
+#
+# This is the "GitHub Actions validation / dispatch" stage of the documented
+# control path, and the only supported way an operator command reaches the
+# Worker:
+#
+#   ChatGPT -> immutable Command -> [ this workflow ] -> Cloudflare Worker
+#           -> D1 / R2 -> Astro render
+#
+# Every gate fails closed. A command that does not validate, whose rule version
+# is stale, whose expected version no longer matches, or whose Asset Intake is
+# not ready, is never dispatched.
+name: Dispatch site command
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Command envelope as JSON. Leave empty to use command_file instead.'
+        required: false
+        type: string
+      command_file:
+        description: 'Path to a committed command envelope, e.g. examples/commands/create-news.json'
+        required: false
+        type: string
+      dry_run:
+        description: 'Run every gate but do not dispatch.'
+        required: false
+        default: true
+        type: boolean
+
+# Read-only: this workflow changes site state through the Worker, never through
+# the repository.
+permissions:
+  contents: read
+
+# One command at a time. Commands carry expectedVersion, so overlapping runs
+# would make the second fail a version check it could otherwise have passed.
+concurrency:
+  group: dispatch-site-command
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+
+    # The environment is where the installation's approvers and secrets live.
+    # Requiring a reviewer here is how an installation puts a human in front of
+    # production writes; the gate itself does not decide that policy.
+    environment: site-operations
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - run: npm ci
+
+      # The operation record. Commands must never carry credentials, so this is
+      # safe to print and is the audit trail for what was requested.
+      - name: Record the requested command
+        env:
+          COMMAND: ${{ inputs.command }}
+          COMMAND_FILE: ${{ inputs.command_file }}
+        run: |
+          echo "actor:    ${{ github.actor }}"
+          echo "dry run:  ${{ inputs.dry_run }}"
+          if [ -n "$COMMAND_FILE" ]; then
+            echo "source:   $COMMAND_FILE"
+            cat "$COMMAND_FILE"
+          else
+            echo "source:   workflow input"
+            printf '%s\n' "$COMMAND"
+          fi
+
+      - name: Validate, preflight and dispatch
+        env:
+          SITE_COMMAND_ENDPOINT: ${{ vars.SITE_COMMAND_ENDPOINT }}
+          COMMAND_HMAC_SECRET: ${{ secrets.COMMAND_HMAC_SECRET }}
+          CONTROL_READ_HMAC_SECRET: ${{ secrets.CONTROL_READ_HMAC_SECRET }}
+          COMMAND: ${{ inputs.command }}
+          COMMAND_FILE: ${{ inputs.command_file }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ -n "$COMMAND_FILE" ]; then
+            ARGS+=(--command-file "$COMMAND_FILE")
+          else
+            ARGS+=(--command "$COMMAND")
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          node scripts/dispatch-command.mjs "${ARGS[@]}"

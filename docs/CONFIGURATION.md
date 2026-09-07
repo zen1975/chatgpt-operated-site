@@ -34,7 +34,7 @@ Declared under `vars` in `wrangler.jsonc`.
 | `SITE_TIMEZONE` | Timezone applied to scheduling and timed-content windows. |
 | `COMMAND_TRUSTED_ACTOR` | Actor name recorded for commands arriving on the trusted ingress. |
 | `COMMAND_TRUSTED_SCOPES` | Comma-separated mutation scopes granted to the trusted ingress. A command whose scope is absent is rejected before any payload validation or storage work. |
-| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. |
+| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. Must include `command:preflight` for the dispatch gate's preflight and `intake:read` for its Asset Intake readiness check. |
 | `WORDPRESS_ASSET_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `import_wordpress_asset`. Not shipped in `wrangler.jsonc`: the command fails closed with `WORDPRESS_ASSET_ORIGIN_ALLOWLIST_REQUIRED` until an installation that wants WordPress import adds it. Add it to `vars` with the origins to import from, for example `https://legacy.example.com`. |
 
 Scope names are enumerated by `MUTATION_SCOPES` in `src/server/commands.ts`.
@@ -103,6 +103,16 @@ non-example file; keep the example as the documented default.
 | `/api/emergency/news` | `EMERGENCY_NEWS_HMAC_SECRET`, 5-minute signature window | Out-of-band emergency publication |
 | `/api/control/*` | `CONTROL_READ_HMAC_SECRET`, 5-minute signature window | Read-only state and contract discovery |
 
-All four fail closed when their secret is absent. None of them accept
+The dispatch gate (`docs/DISPATCH_GATE.md`) is the supported caller of
+`/api/control/preflight` and `/api/internal/commands`. It needs its own
+repository-side configuration, on the `site-operations` GitHub Environment:
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Variable | `SITE_COMMAND_ENDPOINT` | Origin of the deployed Worker |
+| Secret | `COMMAND_HMAC_SECRET` | Must equal the Worker secret of the same name |
+| Secret | `CONTROL_READ_HMAC_SECRET` | Must equal the Worker secret of the same name |
+
+All four endpoints fail closed when their secret is absent. None of them accept
 unauthenticated input, and none of them expose a path that bypasses
 `executeCommand`.

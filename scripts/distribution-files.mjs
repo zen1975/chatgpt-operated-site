@@ -71,6 +71,8 @@ export async function distributionFiles() {
  */
 export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   '.dockerignore',
+  '.github/workflows/ci.yml',
+  '.github/workflows/dispatch-command.yml',
   '.gitignore',
   'AGENTS.md',
   'CONTRIBUTING.md',
@@ -83,6 +85,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'config/rule-version.json',
   'config/site-profile.json',
   'docs/CONFIGURATION.md',
+  'docs/DISPATCH_GATE.md',
   'docs/GETTING_STARTED.md',
   'examples/commands/create-news.json',
   'examples/commands/replace-content-image.json',
@@ -92,6 +95,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'schemas/command-envelope.schema.json',
   'schemas/create-news.schema.json',
   'src/env.d.ts',
+  'scripts/dispatch-command.mjs',
   'src/server/command-schema.ts',
   'src/server/commands.ts',
   'tsconfig.json',

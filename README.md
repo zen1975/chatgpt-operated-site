@@ -95,6 +95,7 @@ Client
 
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
+- [`docs/DISPATCH_GATE.md`](docs/DISPATCH_GATE.md) — the GitHub Actions validation / dispatch stage
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
 - [`docs/EXTENDING_SITE_OPERATIONS.md`](docs/EXTENDING_SITE_OPERATIONS.md) — adding new controlled site operations
 - [`AGENTS.md`](AGENTS.md) — operating contract for coding/operation agents
