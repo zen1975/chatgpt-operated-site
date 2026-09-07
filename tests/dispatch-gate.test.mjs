@@ -157,7 +157,9 @@ test('a command with no target site is refused rather than treated as a wildcard
   await assertBlocked(
     site,
     () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
-    (e) => e.stage === 'target-site' && e.code === 'TARGET_SITE_REQUIRED'
+    // Now mandatory in the authoritative envelope, so an absent value is caught
+    // one gate earlier than the installation-equality check.
+    (e) => e.stage === 'schema' && e.code === 'ENVELOPE_INVALID'
   );
 });
 
@@ -428,4 +430,97 @@ test('missing configuration fails closed rather than dispatching unauthenticated
   } finally {
     Object.assign(process.env, previous);
   }
+});
+
+// ----------------------------------------------------- command id contract
+
+// The envelope and the lookup route share one CommandId schema. When the
+// envelope was looser, an id it admitted could be unaddressable by the lookup
+// the gate performs on every dispatch.
+test('ids the lookup route cannot address are refused at gate 1', async () => {
+  const rejected = {
+    unicode: 'command-\u30b3\u30de\u30f3\u30c9-001',
+    accented: 'commande-cr\u00e9\u00e9e-001',
+    whitespace: 'example create news 001',
+    slash: 'example/create-news/001',
+    overlength: `x${'a'.repeat(200)}`,
+    tooShort: 'short',
+    percent: 'example%2Fnews-001'
+  };
+
+  for (const [label, commandId] of Object.entries(rejected)) {
+    const site = installation();
+    const command = { ...(await example('create-news.json')), commandId };
+    await assertBlocked(
+      site,
+      async () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
+      (e) => e.stage === 'schema' && e.code === 'ENVELOPE_INVALID'
+    );
+    assert.deepEqual(site.calls, [], `${label}: a malformed commandId must be rejected before any request`);
+  }
+});
+
+test('the id format is safe in a URL path segment', async () => {
+  const command = await example('create-news.json');
+  assert.equal(encodeURIComponent(command.commandId), command.commandId, 'a valid id must survive URL encoding unchanged');
+});
+
+// ------------------------------------------------------ target site contract
+
+test('the envelope itself requires targetSite', async () => {
+  const contracts = await (await import('../scripts/load-command-contracts.mjs')).loadCommandContracts();
+  const command = await example('create-news.json');
+  delete command.context.targetSite;
+  assert.equal(contracts.CommandEnvelope.safeParse(command).success, false, 'targetSite must be mandatory in the authoritative schema, not only in the gate');
+
+  const empty = await example('create-news.json');
+  empty.context.targetSite = '';
+  assert.equal(contracts.CommandEnvelope.safeParse(empty).success, false, 'an empty targetSite must not satisfy the schema');
+});
+
+test('the published envelope schema marks targetSite required', async () => {
+  const published = JSON.parse(await readFile(path.join(repoRoot, 'schemas/command-envelope.schema.json'), 'utf8'));
+  assert.ok(published.properties.context.required.includes('targetSite'));
+  assert.equal(published.properties.commandId.pattern, '^[A-Za-z0-9._:-]+$');
+  assert.equal(published.properties.commandId.maxLength, 200);
+});
+
+// ------------------------------------------------------------ command source
+
+test('supplying both command sources is refused', async () => {
+  const site = installation();
+  await assertBlocked(
+    site,
+    async () => runDispatch({ commandFile: 'examples/commands/create-news.json', commandJson: JSON.stringify(await example('create-news.json')), ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
+    (e) => e.stage === 'command-source' && e.code === 'AMBIGUOUS_COMMAND'
+  );
+});
+
+test('supplying neither command source is refused', async () => {
+  const site = installation();
+  await assertBlocked(
+    site,
+    async () => runDispatch({ ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
+    (e) => e.stage === 'command-source' && e.code === 'NO_COMMAND'
+  );
+});
+
+test('an inline command alone is accepted', async () => {
+  const site = installation({ preflight: PREFLIGHT_OK });
+  const result = await runDispatch({ commandJson: JSON.stringify(await example('create-news.json')), ...base, dryRun: true }, { fetchImpl: site.fetchImpl, log: () => {} });
+  assert.equal(result.dispatched, false);
+  assert.equal(result.command.command, 'create_news');
+});
+
+test('blank workflow inputs read as unsupplied, so both can be passed through', async () => {
+  const { parseArgs } = await import('../scripts/dispatch-command.mjs');
+  const inline = JSON.stringify({ ok: true });
+
+  // How the workflow invokes it: both flags always present, one blank.
+  assert.deepEqual(parseArgs(['--command-file', '', '--command', inline]), { dryRun: false, commandFile: undefined, commandJson: inline });
+  assert.deepEqual(parseArgs(['--command-file', 'examples/commands/create-news.json', '--command', '']), { dryRun: false, commandFile: 'examples/commands/create-news.json', commandJson: undefined });
+
+  // Both genuinely supplied, and neither supplied.
+  assert.throws(() => parseArgs(['--command-file', 'examples/commands/create-news.json', '--command', inline]), (e) => e.code === 'AMBIGUOUS_COMMAND');
+  assert.throws(() => parseArgs(['--command-file', '', '--command', '']), (e) => e.code === 'NO_COMMAND');
 });

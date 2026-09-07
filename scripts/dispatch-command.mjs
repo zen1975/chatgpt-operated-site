@@ -46,8 +46,10 @@
 // Secrets are used to compute signatures and are never printed. The command
 // document is echoed as the operation record; it must never carry credentials.
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { repoRoot } from './repo-root.mjs';
 import { loadCommandContracts, loadRuleVersion } from './load-command-contracts.mjs';
 
@@ -119,28 +121,105 @@ function requireEnv(name) {
   return value;
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = { dryRun: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') options.dryRun = true;
-    else if (arg === '--command-file') options.commandFile = argv[++index];
-    else if (arg === '--command') options.commandJson = argv[++index];
+    // An empty value means "this input was left blank", so the workflow can
+    // hand over both inputs verbatim and let the ambiguity check above run.
+    else if (arg === '--command-file') options.commandFile = (argv[++index] || '').trim() || undefined;
+    else if (arg === '--command') options.commandJson = (argv[++index] || '').trim() || undefined;
     else throw new DispatchError('configuration', 'UNKNOWN_ARGUMENT', `Unknown argument: ${arg}`);
   }
-  if (!options.commandFile && !options.commandJson) {
-    throw new DispatchError('configuration', 'NO_COMMAND', 'Provide --command-file <path> or --command <json>.');
-  }
-  if (options.commandFile && options.commandJson) {
-    throw new DispatchError('configuration', 'AMBIGUOUS_COMMAND', 'Provide exactly one of --command-file or --command.');
-  }
+  assertSingleSource(options);
   return options;
 }
 
+const run = promisify(execFile);
+
+/**
+ * Exactly one command source. The caller passes both through independently --
+ * the workflow hands over its two inputs verbatim -- so this check actually
+ * sees an ambiguous pair instead of one being silently preferred and the other
+ * discarded, which would dispatch an operation the operator did not intend.
+ */
+export function assertSingleSource({ commandFile, commandJson }) {
+  if (commandFile && commandJson) {
+    throw new DispatchError('command-source', 'AMBIGUOUS_COMMAND', 'Both a command and a command_file were supplied. Provide exactly one: refusing to guess which operation was intended.');
+  }
+  if (!commandFile && !commandJson) {
+    throw new DispatchError('command-source', 'NO_COMMAND', 'Provide exactly one of --command-file <path> or --command <json>.');
+  }
+}
+
+/**
+ * Resolve --command-file to a committed file inside this repository, before it
+ * is opened.
+ *
+ * A command file names an operation that will mutate a customer site, so the
+ * path is part of the trust boundary: an absolute path, a `..` traversal, or a
+ * symlink pointing outward would let the gate read -- and, once echoed as the
+ * operation record, publish -- a file that is not part of the distribution.
+ * Containment is checked on the *real* path, so a symlink cannot escape by
+ * looking innocent.
+ */
+export async function resolveCommandFile(commandFile, { cwd = repoRoot, gitImpl = run } = {}) {
+  if (path.isAbsolute(commandFile)) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_ABSOLUTE', 'command_file must be a repository-relative path, not an absolute path.');
+  }
+  if (commandFile.split(/[\\/]/).includes('..')) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_TRAVERSAL', 'command_file must not traverse out of the repository with "..".');
+  }
+
+  const candidate = path.resolve(cwd, commandFile);
+  let real;
+  try {
+    real = await realpath(candidate);
+  } catch {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_FOUND', `command_file does not exist: ${commandFile}`);
+  }
+
+  // Compare real paths so a symlink inside the repository pointing outside it
+  // is caught here rather than after being read.
+  const realRoot = await realpath(cwd);
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_OUTSIDE_REPOSITORY', 'command_file resolves outside the repository. Refusing to read it.');
+  }
+
+  const info = await stat(real);
+  if (!info.isFile()) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_A_FILE', 'command_file must be a regular file.');
+  }
+
+  const relative = path.relative(realRoot, real).split(path.sep).join('/');
+
+  // A dispatched command is an immutable record, so it must be one the
+  // repository actually carries -- not a file dropped into the working tree.
+  // Unverifiable is treated as untracked: fail closed.
+  try {
+    const { stdout } = await gitImpl('git', ['ls-files', '--error-unmatch', '--', relative], { cwd: realRoot });
+    if (!stdout.trim()) throw new Error('not tracked');
+  } catch {
+    throw new DispatchError(
+      'command-source',
+      'COMMAND_FILE_NOT_TRACKED',
+      `command_file is not a committed file in this repository: ${relative}. A dispatched command must be part of the repository, and this check cannot be skipped when git is unavailable.`
+    );
+  }
+
+  return { absolutePath: real, relativePath: relative };
+}
+
 async function readCommand(options) {
-  const raw = options.commandFile
-    ? await readFile(path.resolve(repoRoot, options.commandFile), 'utf8')
-    : options.commandJson;
+  assertSingleSource(options);
+  let raw;
+  if (options.commandFile) {
+    const resolved = await resolveCommandFile(options.commandFile);
+    raw = await readFile(resolved.absolutePath, 'utf8');
+  } else {
+    raw = options.commandJson;
+  }
   try {
     return JSON.parse(raw);
   } catch (error) {
@@ -331,10 +410,16 @@ export async function runDispatch(options, io = {}) {
   const fetchImpl = io.fetchImpl || fetch;
   const command = options.command ?? (await readCommand(options));
 
-  log(`command      ${command.command ?? '(unknown)'}`);
-  log(`commandId    ${command.commandId ?? '(unknown)'}`);
-
+  // Nothing about the command is echoed until it has parsed as JSON and passed
+  // the schema. The operation record is printed below, from the validated
+  // value, so an unvalidated file can never be published through this log.
   const { command: validated, siteId, intake } = await validateCommand(command);
+
+  log('--- validated command ---');
+  log(JSON.stringify(validated, null, 2));
+  log('-------------------------');
+  log(`command      ${validated.command}`);
+  log(`commandId    ${validated.commandId}`);
   log('gate 1/5     schema         OK');
   log('gate 2/5     rule version   OK');
   log(`gate 3/5     target site    OK (${siteId})`);
