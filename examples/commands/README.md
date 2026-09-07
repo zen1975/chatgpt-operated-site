@@ -8,6 +8,7 @@ Use them as patterns, not as production data.
 
 - `create-news.json` — a minimal text/content operation.
 - `replace-content-image.json` — an image-bearing operation using the configured Asset Intake layer. Image-bearing commands set `context.requiresAssetIntake` to `true`; the authenticated readiness check belongs to the GitHub Actions dispatch gate, not to ChatGPT.
+- `update-page-hero.json` — a page-composition operation showing that the same controlled model can update a homepage hero or other site section, not only posts. Replace the page and section placeholders with identifiers from the target installation and use the current optimistic-lock versions.
 
 ## Extension pattern
 
