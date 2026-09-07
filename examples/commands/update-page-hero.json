@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "commandId": "example-update-page-hero-001",
+  "commandId": "example-page-hero-001",
   "command": "update_page_section",
   "issuedAt": "2026-09-08T00:00:00Z",
   "context": {
@@ -13,7 +13,7 @@
     "sectionId": "REPLACE_WITH_SECTION_ID",
     "expectedSectionVersion": 1,
     "sectionType": "hero",
-    "variant": "default",
+    "variant": "standard",
     "props": {
       "eyebrow": "Example Company",
       "title": "A new homepage message",
