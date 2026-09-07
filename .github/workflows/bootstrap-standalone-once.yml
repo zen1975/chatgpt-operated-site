@@ -66,3 +66,5 @@ jobs:
           git add -A
           git commit -m 'build: establish standalone OSS baseline'
           git push origin HEAD:main
+
+# rerun after standalone Astro config fix
