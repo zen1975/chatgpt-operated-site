@@ -68,38 +68,41 @@ whichever site the workflow points at.
 an infrastructure one. They are deliberately not the same boolean.
 
 **Is the operation image-bearing?** Decided from the command *and its validated
-payload*, because both can make it so:
+payload*, by `src/server/command-assets.ts` -- one module, used by both the
+Worker and this gate.
 
-1. **Asset commands** — `attach_asset`, `replace_asset`,
-   `attach_product_asset`, `replace_product_asset`,
-   `replace_page_section_asset`, `replace_page_section_item_asset`,
-   `import_wordpress_asset`. Placing an asset is their purpose.
-2. **Page mutations carrying a canonical asset in a registered module slot** —
-   `create_page`, `insert_page_section`, `update_page_section`,
-   `insert_page_section_item`, `update_page_section_item`. A `mediaText.assetId`
-   or a card's `items[].assetId` makes that particular command image-bearing.
+Every command is classified there, with the reason:
 
-The second class is why this cannot be a fixed list of command names: the same
-command is image-bearing or not depending on what it carries.
+| Class | Meaning | Commands |
+| --- | --- | --- |
+| **intrinsic** | placing an asset is the operation | `attach_asset`, `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset`, `replace_page_section_item_asset`, `import_wordpress_asset` |
+| **payload-derived** | image-bearing only when this payload carries an asset | `create_news`, `update_content` (ContentAST image blocks), `create_product` (`primaryAssetId`), `create_page`, `insert_page_section`, `update_page_section`, `insert_page_section_item`, `update_page_section_item` (module asset slots) |
+| **non-image** | never image-bearing | the remaining eighteen |
 
-Which slots count comes from the **page-composition module registry** — the
-gate calls `extractModuleAssetReferences`, the same function the Worker
-validates with, and derives item slot names from `MODULE_REGISTRY`. There is
-deliberately no second list of asset paths in the gate, and no generic scan for
-fields named `assetId`: a module that gains an asset slot is picked up here
-automatically, and a string field the registry does not declare is not mistaken
-for an asset. A registered slot also has to hold a value that is actually a
-canonical asset id.
+"The payload contains an asset id" and "the operation is image-bearing" are not
+the same statement, and the non-image class is where that shows. `reorder_*`
+passes asset ids but introduces none; `rollback_*` restores assets that are
+already registered; `remove_*` detaches. The contract's flag is about bringing
+an asset *in*, not about mentioning one, so each of those carries an explicit
+reason in the matrix rather than being decided by whether an id appears
+anywhere.
 
-Page commands that carry no module props or item body — `update_page`,
-`remove_page_section`, `reorder_page_sections`, `remove_page_section_item`,
-`reorder_page_section_items`, `rollback_page` — are never image-bearing.
-`rollback_page` restores assets that are already registered; its payload names a
-revision, not an asset.
+Extraction always defers to whichever schema owns the shape:
 
-The flag is required whenever the operation is image-bearing
-(`ASSET_INTAKE_FLAG_MISSING`) and refused when it is not
-(`ASSET_INTAKE_FLAG_UNEXPECTED`).
+| Shape | Extractor |
+| --- | --- |
+| content bodies | `extractContentAstAssetReferences` — lives beside the ContentAST schema |
+| page module props and item slots | `extractModuleAssetReferences` and `MODULE_REGISTRY` |
+| product primary asset | the canonical `AssetId` schema |
+
+There is deliberately no generic search for fields named `assetId`: only a
+declared position counts, and only when the value is a canonical asset id. A
+paragraph block carrying such a field is not an image, and a module that
+declares no asset slot has no asset.
+
+A contract test fails the build when the matrix and `COMMAND_PAYLOAD_SCHEMAS`
+name different commands, so a new command cannot be added without being
+classified.
 
 **Must a provider be ready?** Only when the asset actually arrives through one.
 Read from the validated payload:

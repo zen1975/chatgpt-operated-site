@@ -110,97 +110,24 @@ async function installationSiteId() {
 }
 
 /**
- * Commands whose whole purpose is to place an asset. Image-bearing by
- * definition, whatever form the asset takes.
- */
-const ASSET_COMMANDS = new Set([
-  'import_wordpress_asset',
-  'attach_asset',
-  'replace_asset',
-  'attach_product_asset',
-  'replace_product_asset',
-  'replace_page_section_asset',
-  'replace_page_section_item_asset'
-]);
-
-const loadPageRegistry = () => loadServerModule('src/server/page-composition/registry.ts');
-const loadPageSchemas = () => loadServerModule('src/server/page-composition/schemas.ts');
-
-/**
- * Asset slots a page module declares for its items, e.g. `items[].assetId`.
+ * Whether an operation is image-bearing, and which assets it carries.
  *
- * Derived from the module registry rather than listed here, so a module that
- * gains an item asset slot is picked up by this gate without a second list
- * having to be updated in step. Item payloads carry no sectionType, so the slot
- * *names* are what can be matched against them.
+ * Both come from `src/server/command-assets.ts` -- the same module the Worker
+ * uses -- rather than being re-derived here. The gate previously grew its own
+ * partial answer twice: first a list of command names, then a page-only
+ * extension, and each time a payload shape that can carry an asset was missed.
+ * A gate-local rule is a second definition of where assets live, and it drifts.
  */
-function itemAssetSlotNames(registry) {
-  const names = new Set();
-  for (const entry of Object.values(registry)) {
-    for (const slot of Object.keys(entry.assetFields ?? {})) {
-      const match = slot.match(/^items\[\]\.(.+)$/);
-      if (match) names.add(match[1]);
-    }
-  }
-  return names;
-}
+const loadCommandAssets = () => loadServerModule('src/server/command-assets.ts');
 
-/**
- * Canonical asset references carried inside a page command's payload.
- *
- * Uses the page-composition registry's own extractor as the source of truth --
- * not a generic walk for keys named "assetId". A second, gate-local list of
- * asset paths would drift from the one the Worker validates against, and a
- * generic walk would classify any unrelated string field as an asset.
- */
-async function pageAssetReferences(command, payload) {
-  if (!payload || typeof payload !== 'object') return [];
-  const { MODULE_REGISTRY, extractModuleAssetReferences } = await loadPageRegistry();
-
-  const fromSection = (section) => {
-    if (!section || typeof section !== 'object' || typeof section.sectionType !== 'string') return [];
-    try {
-      return extractModuleAssetReferences({ sectionType: section.sectionType, props: section.props });
-    } catch {
-      // An unregistered module type is rejected by the schema gate; it is not
-      // this function's job to decide that.
-      return [];
-    }
-  };
-
-  if (command === 'create_page') {
-    return (Array.isArray(payload.sections) ? payload.sections : []).flatMap(fromSection);
-  }
-  if (command === 'insert_page_section' || command === 'update_page_section') {
-    return fromSection(payload);
-  }
-  if (command === 'insert_page_section_item' || command === 'update_page_section_item') {
-    const item = payload.item;
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
-    const { AssetId } = await loadPageSchemas();
-    // Only the slot names the registry declares, and only when the value is
-    // actually a canonical asset id -- so an unrelated string field named
-    // similarly is not mistaken for an asset.
-    return [...itemAssetSlotNames(MODULE_REGISTRY)]
-      .filter((slot) => AssetId.safeParse(item[slot]).success)
-      .map((slot) => ({ assetId: item[slot], assetPath: `item.${slot}`, role: 'item' }));
-  }
-  return [];
-}
-
-/**
- * Whether an operation is image-bearing, in the sense the operating contract
- * uses.
- *
- * Two ways to qualify: the command is an asset command, or its validated
- * payload carries a canonical asset in a registered module slot. Deciding this
- * from the command name alone rejected compliant page mutations that embed an
- * assetId in their module props -- `mediaText.assetId`, a card's
- * `items[].assetId` -- and let those same commands through without the flag.
- */
 export async function isImageBearingOperation(command, validatedPayload) {
-  if (ASSET_COMMANDS.has(command)) return true;
-  return (await pageAssetReferences(command, validatedPayload)).length > 0;
+  const { isImageBearingOperation: decide } = await loadCommandAssets();
+  return decide(command, validatedPayload);
+}
+
+export async function extractCommandAssetReferences(command, validatedPayload) {
+  const { extractCommandAssetReferences: extract } = await loadCommandAssets();
+  return extract(command, validatedPayload);
 }
 
 /**

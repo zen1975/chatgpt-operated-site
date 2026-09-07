@@ -101,6 +101,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'src/server/control-plane/job-store.ts',
   'src/server/control-plane/replay.ts',
   'src/server/site-identity.ts',
+  'src/server/command-assets.ts',
   'src/server/command-schema.ts',
   'src/server/commands.ts',
   'tsconfig.json',

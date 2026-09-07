@@ -168,13 +168,20 @@ test('a string field that is not a registered slot is not mistaken for an asset'
 
 // ------------------------------------------------- registry is the source of truth
 
-test('the determination follows the registry, not a gate-local list', async () => {
-  const source = await readFile(path.join(repoRoot, 'scripts/dispatch-command.mjs'), 'utf8');
+test('the determination is delegated to the shared server module', async () => {
+  const gate = await readFile(path.join(repoRoot, 'scripts/dispatch-command.mjs'), 'utf8');
 
-  assert.match(source, /extractModuleAssetReferences/, 'section assets must come from the registry extractor');
-  assert.match(source, /MODULE_REGISTRY/, 'item slots must be derived from the registry');
-  assert.ok(!/'items\[\]\.assetId'/.test(source), 'the gate must not restate a module asset path');
-  assert.ok(!/JSON\.stringify\(payload\).*assetId|walk\(/.test(source), 'the gate must not scan payloads generically for asset-like keys');
+  // The gate must not re-derive asset semantics. It asks the one module that
+  // owns them, which is also what the Worker uses.
+  assert.match(gate, /loadServerModule\('src\/server\/command-assets\.ts'\)/, 'the gate must delegate to the shared module');
+  assert.ok(!/MODULE_REGISTRY/.test(gate), 'the gate must not read the module registry itself');
+  assert.ok(!/items\[\]\.assetId|'assetId'/.test(gate), 'the gate must not restate an asset path');
+  assert.ok(!/extractContentAstAssetReferences/.test(gate), 'content assets are the shared module\'s business too');
+
+  const shared = await readFile(path.join(repoRoot, 'src/server/command-assets.ts'), 'utf8');
+  assert.match(shared, /extractModuleAssetReferences/, 'page assets must come from the registry extractor');
+  assert.match(shared, /extractContentAstAssetReferences/, 'content assets must come from the ContentAST extractor');
+  assert.ok(!/JSON\.stringify\(payload\)|function walk\(/.test(shared), 'no generic search for asset-like keys');
 });
 
 test('every registered module asset slot is detected by the gate', async () => {

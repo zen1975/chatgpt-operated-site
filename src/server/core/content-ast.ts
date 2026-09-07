@@ -15,3 +15,27 @@ export const ContentBlock = z.discriminatedUnion('type', [
 export const ContentAST = z.array(ContentBlock).min(1);
 export type ContentBlockType = z.infer<typeof ContentBlock>;
 export type ContentASTType = z.infer<typeof ContentAST>;
+
+export type ContentAstAssetReference = { assetId: string; path: string };
+
+/**
+ * The asset references a content body carries.
+ *
+ * Lives beside the schema that defines those blocks, so the shape and the way
+ * assets are found from it cannot drift apart, and both the Worker and the
+ * dispatch gate read assets from this one function. Deliberately not a generic
+ * search for keys called `assetId`: only the `image` block declares one, and a
+ * paragraph or link that happened to contain such a key is not an asset.
+ */
+export function extractContentAstAssetReferences(blocks: unknown): ContentAstAssetReference[] {
+  if (!Array.isArray(blocks)) return [];
+  const references: ContentAstAssetReference[] = [];
+  blocks.forEach((block, index) => {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) return;
+    const candidate = block as { type?: unknown; assetId?: unknown };
+    if (candidate.type !== 'image') return;
+    if (typeof candidate.assetId !== 'string' || !candidate.assetId) return;
+    references.push({ assetId: candidate.assetId, path: `blocks[${index}].assetId` });
+  });
+  return references;
+}
