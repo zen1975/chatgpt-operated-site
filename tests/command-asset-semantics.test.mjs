@@ -195,7 +195,16 @@ test('a provider reference does perform the readiness request', async () => {
     const pathname = new URL(url).pathname;
     requests.push(pathname);
     if (pathname.startsWith('/api/control/commands/')) return { ok: true, status: 200, json: async () => ({ success: true, siteId: SITE_ID, known: false, status: null }) };
-    if (pathname === '/api/control/readiness/asset-intake/') return { ok: true, status: 200, json: async () => ({ success: true, readiness: { status: 'READY', code: 'ASSET_INTAKE_READY', provider: 'google_drive', checks: [] } }) };
+    if (pathname === '/api/control/readiness/asset-intake/') {
+      // The installation issues a receipt bound to the command it was asked
+      // about; the gate refuses to proceed without one.
+      return { ok: true, status: 200, json: async () => ({
+        success: true,
+        siteId: SITE_ID,
+        readiness: { status: 'READY', code: 'ASSET_INTAKE_READY', provider: 'google_drive', checks: [] },
+        receipt: { receiptVersion: 1, commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', siteId: SITE_ID, provider: 'google_drive', readiness: 'READY', issuedAt: '2026-09-07T00:00:00Z', expiresAt: '2026-09-07T00:10:00Z', signature: 'a'.repeat(64) }
+      }) };
+    }
     if (pathname === '/api/control/preflight/') return { ok: true, status: 200, json: async () => ({ success: true, siteId: SITE_ID, preflight: { commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', sideEffects: false } }) };
     throw new Error(`unexpected request to ${pathname}`);
   };
@@ -242,4 +251,43 @@ test('a new canonical asset field cannot pass unclassified', async () => {
   }
 
   assert.deepEqual(offenders, [], offenders.join('\n'));
+});
+
+// ------------------------------------------------- digest excludes attestation
+
+// A receipt binds itself to the command digest, so including it would be
+// circular. The exclusion must be exactly that, and no wider.
+test('the digest excludes attestation metadata and nothing else', async () => {
+  const { commandDigest, commandForDigest, ATTESTATION_CONTEXT_KEYS } = await loadServerModule('src/server/control-plane/digest.ts');
+
+  assert.deepEqual([...ATTESTATION_CONTEXT_KEYS].sort(), ['preflight', 'readinessReceipt']);
+
+  const base = envelope('create_news', { title: 'Headline', blocks: TEXT_BLOCKS });
+  const digest = await commandDigest(base);
+
+  // Attaching either attestation leaves the digest unchanged.
+  const withPreflight = { ...base, context: { ...base.context, preflight: { commandDigest: digest, contractVersion: 'v1' } } };
+  const withReceipt = { ...base, context: { ...base.context, readinessReceipt: { receiptVersion: 1, commandDigest: digest, contractVersion: 'v1', siteId: SITE_ID, provider: 'generated', readiness: 'READY', issuedAt: '2026-09-07T00:00:00Z', expiresAt: '2026-09-07T00:10:00Z', signature: 'a'.repeat(64) } } };
+
+  assert.equal(await commandDigest(withPreflight), digest, 'a preflight receipt must not change the digest');
+  assert.equal(await commandDigest(withReceipt), digest, 'a readiness receipt must not change the digest');
+  assert.equal(await commandDigest({ ...withPreflight, context: { ...withReceipt.context, ...withPreflight.context } }), digest, 'nor both together');
+
+  // Everything else still changes it. This is the half that would break if the
+  // exclusion were widened.
+  const changed = {
+    payload: { ...base, payload: { title: 'A different headline', blocks: TEXT_BLOCKS } },
+    targetSite: { ...base, context: { ...base.context, targetSite: 'another-site' } },
+    ruleVersion: { ...base, context: { ...base.context, ruleVersion: '9.9.9' } },
+    requiresAssetIntake: { ...base, context: { ...base.context, requiresAssetIntake: true } },
+    commandId: { ...base, commandId: 'a-different-command-id' },
+    issuedAt: { ...base, issuedAt: '2026-01-01T00:00:00Z' }
+  };
+  for (const [field, variant] of Object.entries(changed)) {
+    assert.notEqual(await commandDigest(variant), digest, `${field} is part of the command and must change its digest`);
+  }
+
+  // The retained context keys are visibly still there.
+  const retained = commandForDigest(withReceipt);
+  assert.deepEqual(Object.keys(retained.context).sort(), ['ruleVersion', 'targetSite']);
 });

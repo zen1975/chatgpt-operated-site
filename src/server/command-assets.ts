@@ -88,6 +88,33 @@ export const COMMAND_ASSET_SEMANTICS: Record<string, CommandAssetSemantics> = {
   reorder_page_section_items: { semantics: 'non-image', reason: 'reorders items by id only; introduces nothing' }
 };
 
+/**
+ * Commands that may carry a provider reference, and where the provider is
+ * named. The attach commands are absent: their schemas require a canonical
+ * assetId and reject a reference.
+ */
+const REFERENCE_BEARING_COMMANDS = new Set(['replace_asset', 'replace_product_asset', 'replace_page_section_asset']);
+
+export type ProviderIntake = { provider: string | null; via: string };
+
+/**
+ * Whether this command brings an asset in through a provider, and which one.
+ *
+ * Separate from `isImageBearingOperation`: a command naming a canonical asset
+ * is image-bearing and requires the contract flag, but needs no provider and so
+ * no readiness evidence. Shared, so the gate and the Worker cannot disagree
+ * about which commands require that evidence.
+ */
+export function providerIntake(command: string, validatedPayload: unknown): ProviderIntake | null {
+  if (command === 'import_wordpress_asset') return { provider: 'wordpress', via: 'command' };
+  const payload = asRecord(validatedPayload);
+  if (payload && REFERENCE_BEARING_COMMANDS.has(command) && asRecord(payload.reference)) {
+    const reference = asRecord(payload.reference) as Record<string, unknown>;
+    return { provider: typeof reference.provider === 'string' ? reference.provider : null, via: 'payload.reference.provider' };
+  }
+  return null;
+}
+
 /** Item-level asset slots, derived from the module registry rather than listed. */
 function itemAssetSlotNames() {
   const names = new Set<string>();

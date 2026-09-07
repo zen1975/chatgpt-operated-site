@@ -391,7 +391,7 @@ function signedControlRequest(endpoint, pathname, method, secret) {
 }
 
 /** Gate 4. Only for image-bearing commands. */
-export async function checkAssetIntakeReadiness({ provider, endpoint, controlSecret, fetchImpl = fetch }) {
+export async function checkAssetIntakeReadiness({ provider, endpoint, controlSecret, commandDigest, fetchImpl = fetch }) {
   const mechanism = READINESS_MECHANISMS[provider];
   if (!mechanism) {
     throw new DispatchError(
@@ -402,9 +402,12 @@ export async function checkAssetIntakeReadiness({ provider, endpoint, controlSec
       { provider, supported: Object.keys(READINESS_MECHANISMS) }
     );
   }
-  const pathname = mechanism.pathname;
-  const { url, init } = signedControlRequest(endpoint, pathname, 'GET', controlSecret);
-  const response = await fetchImpl(url, init);
+  // The digest travels with the request so the installation can bind its
+  // receipt to this exact command rather than issuing a standing one.
+  const pathname = commandDigest ? `${mechanism.pathname}?commandDigest=${encodeURIComponent(commandDigest)}` : mechanism.pathname;
+  const { url, init } = signedControlRequest(endpoint, mechanism.pathname, 'GET', controlSecret);
+  init.__signedPath = mechanism.pathname;
+  const response = await fetchImpl(`${endpoint}${pathname}`, init);
   const body = await response.json().catch(() => null);
 
   if (!response.ok || !body?.success) {
@@ -418,7 +421,10 @@ export async function checkAssetIntakeReadiness({ provider, endpoint, controlSec
       failedChecks: (body.readiness?.checks || []).filter((check) => check.status === 'FAIL').map((check) => ({ id: check.id, code: check.code }))
     });
   }
-  return body.readiness;
+  if (commandDigest && !body.receipt) {
+    throw new DispatchError('readiness', 'READINESS_RECEIPT_NOT_ISSUED', 'The installation reported READY but issued no readiness receipt, so provider intake cannot be authorised.');
+  }
+  return { readiness: body.readiness, receipt: body.receipt };
 }
 
 /** Gate 3. Read-only; the Worker reports sideEffects:false. */
@@ -600,9 +606,11 @@ export async function runDispatch(options, io = {}) {
   // Readiness runs only when an asset actually arrives through a provider. A
   // command naming a canonical assetId is still image-bearing, but it needs no
   // provider, so gating it on one would block it on unrelated infrastructure.
+  let readinessReceipt;
   if (intake) {
-    await checkAssetIntakeReadiness({ provider: intake.provider, endpoint, controlSecret, fetchImpl });
-    log(`gate 4/6     asset intake   READY (${intake.provider})`);
+    const outcome = await checkAssetIntakeReadiness({ provider: intake.provider, endpoint, controlSecret, commandDigest: digest, fetchImpl });
+    readinessReceipt = outcome.receipt;
+    log(`gate 4/6     asset intake   READY (${intake.provider}), receipt issued`);
   } else {
     log(`gate 4/6     asset intake   no provider intake for this command${imageBearing ? ' (canonical asset)' : ''}`);
   }
@@ -616,7 +624,9 @@ export async function runDispatch(options, io = {}) {
   });
   log(`gate 5/5     preflight      OK (${receipt.commandDigest})`);
 
-  const bound = bindPreflightReceipt(validated, receipt);
+  // Both attestations ride in context and are excluded from the digest they
+  // bind to, so attaching them cannot change which command they attest.
+  const bound = bindPreflightReceipt(readinessReceipt ? { ...validated, context: { ...validated.context, readinessReceipt } } : validated, receipt);
 
   if (options.dryRun) {
     log('\ndry run: all gates passed; nothing was dispatched.');

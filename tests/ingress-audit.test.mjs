@@ -17,6 +17,7 @@ const INGRESSES = {
   'src/pages/api/v1/commands.ts': { executes: true, constructs: false, secret: 'COMMAND_HMAC_SECRET' },
   'src/pages/api/emergency/news.ts': { executes: true, constructs: true, secret: 'EMERGENCY_NEWS_HMAC_SECRET' },
   'src/pages/api/control/preflight.ts': { executes: false, constructs: false, secret: 'CONTROL_READ_HMAC_SECRET' },
+  'src/pages/api/control/readiness/asset-intake.ts': { executes: false, constructs: false, secret: 'CONTROL_READ_HMAC_SECRET' },
   'src/pages/api/control/commands/[commandId].ts': { executes: false, constructs: false, secret: 'CONTROL_READ_HMAC_SECRET' }
 };
 
@@ -35,8 +36,10 @@ test('the audit covers every command-capable route', async () => {
   const commandCapable = [];
   for (const route of routes) {
     const source = await read(route);
-    // Constructs, executes, validates or resolves a command by id.
-    if (/executeCommand\(|preflightCommand\(|CommandEnvelope|restToCanonicalCommand\(|CommandId/.test(source)) commandCapable.push(route);
+    // Constructs, executes, validates, resolves, or issues attestation for a
+    // command. The readiness route qualifies: it signs evidence bound to a
+    // specific command digest.
+    if (/executeCommand\(|preflightCommand\(|CommandEnvelope|restToCanonicalCommand\(|CommandId|issueReadinessReceipt\(/.test(source)) commandCapable.push(route);
   }
 
   assert.deepEqual(
@@ -154,4 +157,71 @@ test('the emergency command shape satisfies the envelope', async () => {
   const parsed = CommandEnvelope.safeParse(envelope);
   assert.ok(parsed.success, `the emergency route builds an invalid envelope: ${JSON.stringify(parsed.error?.issues)}`);
   assert.equal(parsed.data.context.targetSite, SITE_ID);
+});
+
+// ------------------------------------------ image contract at every ingress
+
+// The Worker enforces the image-operation contract, so an authenticated ingress
+// that does not pass through the dispatch gate inherits it rather than being a
+// way around it.
+test('no ingress can bypass the image-operation contract', async () => {
+  const worker = await read('src/server/commands.ts');
+
+  for (const [route, expected] of Object.entries(INGRESSES)) {
+    if (!expected.executes) continue;
+    const source = await read(route);
+    // Every executing ingress goes through executeCommand, which is where the
+    // contract lives. None may pre-approve intake on the caller's behalf.
+    assert.match(source, /executeCommand\(/, `${route} must dispatch through executeCommand`);
+    assert.ok(!/requiresAssetIntake\s*:\s*true/.test(source), `${route} must not assert intake on the caller's behalf`);
+    assert.ok(!/readinessReceipt/.test(source), `${route} must not mint or inject readiness evidence`);
+  }
+
+  assert.match(worker, /ASSET_INTAKE_FLAG_MISSING/, 'the Worker enforces the flag contract');
+  assert.match(worker, /verifyReadinessReceipt\(/, 'and requires readiness evidence for provider intake');
+});
+
+test('an ingress cannot name an actor it is not', async () => {
+  const v1 = await read('src/pages/api/v1/commands.ts');
+  const internal = await read('src/pages/api/internal/commands.ts');
+
+  // Each route pins its own actor; the actor is not taken from the request.
+  assert.match(v1, /trustedCommandRuntime\('authenticated-command-client'\)/, '/api/v1/commands must identify as itself');
+  assert.match(internal, /trustedCommandRuntime\('github-actions'\)/, '/api/internal/commands identifies as the dispatch gate');
+  assert.ok(!/trustedCommandRuntime\([^)]*(body|request|headers|input|payload)/.test(v1), 'the v1 actor must not come from the request');
+  assert.ok(!/'github-actions'/.test(v1), '/api/v1/commands must not be able to claim the dispatch gate\'s actor');
+});
+
+test('the readiness receipt signature is compared in constant time', async () => {
+  const source = await read('src/server/control-plane/readiness-receipt.ts');
+
+  assert.match(source, /function safeEqual\(/, 'receipt verification must use a constant-time comparison');
+  assert.match(source, /if \(!safeEqual\(receipt\.signature, expected\)\)/, 'and must actually use it');
+  assert.ok(
+    !/signature\s*!==\s*expected|expected\s*!==\s*receipt\.signature|signature\s*===\s*expected/.test(source),
+    'a signature must never be compared with === or !==: the timing leak is what lets one be recovered byte by byte'
+  );
+});
+
+test('the readiness receipt secret is separate from the command secret', async () => {
+  const receipt = await read('src/server/control-plane/readiness-receipt.ts');
+  assert.match(receipt, /READINESS_RECEIPT_HMAC_SECRET/, 'receipts use their own secret');
+  assert.ok(!/COMMAND_HMAC_SECRET/.test(receipt), 'holding the command secret must not be enough to mint readiness evidence');
+
+  // ...and the command ingress does not hold the receipt secret.
+  for (const route of ['src/pages/api/v1/commands.ts', 'src/pages/api/internal/commands.ts']) {
+    const source = await read(route);
+    assert.ok(!/READINESS_RECEIPT_HMAC_SECRET/.test(source), `${route} must not hold the receipt secret`);
+  }
+});
+
+test('the receipt is issued only from a verified readiness result', async () => {
+  const endpoint = await read('src/pages/api/control/readiness/asset-intake.ts');
+
+  assert.match(endpoint, /const readiness = await assetIntakeReadiness\(/, 'readiness is evaluated by the shared implementation');
+  assert.match(endpoint, /readiness\.status === 'READY'/, 'and a receipt follows only from that result');
+  assert.ok(!/body\.ready|input\.ready|searchParams\.get\('ready'\)/.test(endpoint), 'a caller-supplied verdict must never be signed');
+
+  const receipt = await read('src/server/control-plane/readiness-receipt.ts');
+  assert.match(receipt, /input\.readiness !== 'READY'/, 'the issuer refuses to sign a non-ready verdict');
 });

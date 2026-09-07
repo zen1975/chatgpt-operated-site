@@ -16,14 +16,38 @@ const SHA = 'e'.repeat(64);
 const PREPARED_ASSET_ID = `asset_${SHA}_original`;
 const PREPARED_R2_KEY = `assets/${SHA.slice(0, 2)}/${SHA}.jpg`;
 
-const envelope = (command, payload, commandId = `handler-${command.replace(/_/g, '-')}-0001`) => ({
+const envelope = (command, payload, commandId = `handler-${command.replace(/_/g, '-')}-0001`, context = {}) => ({
   schemaVersion: 1,
   commandId,
   command,
   issuedAt: '2026-09-07T00:00:00Z',
-  context: { ruleVersion: RULE_VERSION, targetSite: SITE_ID },
+  context: { ruleVersion: RULE_VERSION, targetSite: SITE_ID, ...context },
   payload
 });
+
+/**
+ * An image operation as the dispatch gate would present it: the contract flag,
+ * and for provider intake a readiness receipt signed by this installation.
+ *
+ * Built with the real issuer, so a test cannot pass with evidence the Worker
+ * would reject.
+ */
+async function imageEnvelope(command, payload, commandId, { provider } = {}) {
+  const base = envelope(command, payload, commandId, { requiresAssetIntake: true });
+  if (!provider) return base;
+
+  const { commandDigest } = await loadServerModule('src/server/control-plane/digest.ts');
+  const { issueReadinessReceipt } = await loadServerModule('src/server/control-plane/readiness-receipt.ts');
+  const { contractVersion } = await loadServerModule('src/server/control-plane/contracts.ts');
+
+  const receipt = await issueReadinessReceipt({
+    commandDigest: await commandDigest(base),
+    contractVersion: contractVersion(),
+    provider,
+    readiness: 'READY'
+  });
+  return { ...base, context: { ...base.context, readinessReceipt: receipt } };
+}
 
 /** A provider fetch that yields deterministic bytes for the reference paths. */
 // A minimal but genuinely JPEG-shaped payload: intake validates the magic
@@ -111,10 +135,10 @@ test('a first-time provider-backed replace_asset succeeds and registers the asse
     await seedContent(runtime);
 
     const result = await executeCommand(
-      envelope('replace_asset', {
+      await imageEnvelope('replace_asset', {
         contentType: 'news', contentId: 'content_1', expectedVersion: 1, role: 'hero', position: 0,
         reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }
-      }),
+      }, undefined, { provider: 'generated' }),
       { generatedArtifactFetcher }
     );
 
@@ -134,10 +158,10 @@ test('a first-time provider-backed replace_product_asset succeeds', async () => 
     const product = runtime.db.prepare('SELECT id,version FROM products').get();
 
     const result = await executeCommand(
-      envelope('replace_product_asset', {
+      await imageEnvelope('replace_product_asset', {
         productId: product.id, expectedVersion: product.version, role: 'primary', position: 0,
         reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }
-      }),
+      }, undefined, { provider: 'generated' }),
       { generatedArtifactFetcher }
     );
 
@@ -155,7 +179,7 @@ test('a canonical assetId that does not exist is still rejected', async () => {
     await seedContent(runtime);
 
     await assert.rejects(
-      () => executeCommand(envelope('replace_asset', {
+      async () => executeCommand(await imageEnvelope('replace_asset', {
         contentType: 'news', contentId: 'content_1', expectedVersion: 1, role: 'hero', position: 0,
         assetId: `asset_${'f'.repeat(64)}_original`
       })),
@@ -173,7 +197,7 @@ test('a canonical assetId that exists is accepted', async () => {
     runtime.db.prepare(`INSERT INTO assets (id,r2_key,original_filename,mime_type,bytes,alt,variant,created_at,source_provider,sha256,logical_asset_id,validation_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(PREPARED_ASSET_ID, PREPARED_R2_KEY, 'a.jpg', 'image/jpeg', 4, '', 'original', 'now', 'generated', SHA, `logical_${SHA}`, 'validated');
 
-    const result = await executeCommand(envelope('replace_asset', {
+    const result = await executeCommand(await imageEnvelope('replace_asset', {
       contentType: 'news', contentId: 'content_1', expectedVersion: 1, role: 'hero', position: 0, assetId: PREPARED_ASSET_ID
     }));
     assert.equal(result.success, true);
@@ -187,11 +211,11 @@ test('a version conflict rolls back registration, attachment, revision and succe
     await seedContent(runtime);
 
     await assert.rejects(
-      () => executeCommand(
-        envelope('replace_asset', {
+      async () => executeCommand(
+        await imageEnvelope('replace_asset', {
           contentType: 'news', contentId: 'content_1', expectedVersion: 5, role: 'hero', position: 0,
           reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }
-        }),
+        }, undefined, { provider: 'generated' }),
         { generatedArtifactFetcher }
       ),
       (error) => error.code === 'CONTENT_VERSION_CONFLICT' || error.code === 'VERSION_CONFLICT'
@@ -207,10 +231,10 @@ test('every committed asset row points at an object that exists', async () => {
   await withRuntime(async (runtime, executeCommand) => {
     await seedContent(runtime);
     await executeCommand(
-      envelope('replace_asset', {
+      await imageEnvelope('replace_asset', {
         contentType: 'news', contentId: 'content_1', expectedVersion: 1, role: 'hero', position: 0,
         reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }
-      }),
+      }, undefined, { provider: 'generated' }),
       { generatedArtifactFetcher }
     );
 
@@ -250,12 +274,12 @@ test('a first-time provider-backed replace_page_section_asset succeeds', async (
     const section = runtime.db.prepare('SELECT id,version FROM page_sections').get();
 
     const result = await execute(
-      envelope('replace_page_section_asset', {
+      await imageEnvelope('replace_page_section_asset', {
         pageId: page.id, expectedVersion: page.version,
         sectionId: section.id, expectedSectionVersion: section.version,
         assetPath: 'assetId',
         reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }
-      }),
+      }, undefined, { provider: 'generated' }),
       { generatedArtifactFetcher }
     );
 
@@ -276,7 +300,7 @@ test('a page section replacement naming a missing canonical asset is rejected', 
     const section = runtime.db.prepare('SELECT id,version FROM page_sections').get();
 
     await assert.rejects(
-      () => execute(envelope('replace_page_section_asset', {
+      async () => execute(await imageEnvelope('replace_page_section_asset', {
         pageId: page.id, expectedVersion: page.version,
         sectionId: section.id, expectedSectionVersion: section.version,
         assetPath: 'assetId', assetId: `asset_${'f'.repeat(64)}_original`
@@ -326,13 +350,13 @@ test('a provider-backed replacement still validates the other slots', async () =
     const { page, section } = await seedMultiAssetSection(runtime, execute);
 
     await assert.rejects(
-      () => execute(
-        envelope('replace_page_section_asset', {
+      async () => execute(
+        await imageEnvelope('replace_page_section_asset', {
           pageId: page.id, expectedVersion: page.version,
           sectionId: section.id, expectedSectionVersion: section.version,
           assetPath: 'items[0].assetId',
           reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'thumbnail' }
-        }),
+        }, undefined, { provider: 'generated' }),
         { generatedArtifactFetcher }
       ),
       (error) => error.code === 'PAGE_ASSET_UNUSABLE',
@@ -357,12 +381,12 @@ test('a provider-backed replacement succeeds when the other slots are usable', a
     runtime.db.prepare('UPDATE page_sections SET props_json=? WHERE id=?').run(JSON.stringify(props), section.id);
 
     const result = await execute(
-      envelope('replace_page_section_asset', {
+      await imageEnvelope('replace_page_section_asset', {
         pageId: page.id, expectedVersion: page.version,
         sectionId: section.id, expectedSectionVersion: section.version,
         assetPath: 'items[0].assetId',
         reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'thumbnail' }
-      }),
+      }, undefined, { provider: 'generated' }),
       { generatedArtifactFetcher }
     );
 

@@ -50,6 +50,7 @@ Provision with `wrangler secret put <NAME>`. None of these belong in
 | --- | --- | --- |
 | `COMMAND_HMAC_SECRET` | Yes | Verifies the HMAC signature on `/api/v1/commands` and `/api/internal/commands`. Without it no command can be dispatched. |
 | `CONTROL_READ_HMAC_SECRET` | For control-plane reads | Verifies read requests under `/api/control/*`. When unset, the read control plane fails closed with `CONTROL_READ_AUTH_UNAVAILABLE`. |
+| `READINESS_RECEIPT_HMAC_SECRET` | For provider Asset Intake | Signs and verifies Asset Intake readiness receipts. **Deliberately separate from `COMMAND_HMAC_SECRET`**: holding the command secret must not be enough to mint evidence that readiness was checked, or an authenticated caller could forge its own and bypass the readiness gate. Without it, provider intake fails closed with `READINESS_RECEIPT_UNAVAILABLE`; canonical-asset operations are unaffected. |
 | `EMERGENCY_NEWS_HMAC_SECRET` | Optional | Enables `/api/emergency/news`. When unset, the endpoint fails closed with `EMERGENCY_NEWS_DISABLED`. |
 
 ### Asset Intake (Google Drive)

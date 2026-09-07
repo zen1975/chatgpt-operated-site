@@ -1,0 +1,37 @@
+# Local development secrets. Copy to .dev.vars and fill in real values.
+#
+# .dev.vars is git-ignored; this example carries placeholders only. Production
+# values belong in Cloudflare Workers Secrets (`wrangler secret put`), never in
+# the repository. See docs/CONFIGURATION.md.
+
+# Verifies the HMAC signature on /api/v1/commands and /api/internal/commands.
+COMMAND_HMAC_SECRET="replace-me-command-hmac-secret"
+
+# Verifies read requests to /api/control/*.
+CONTROL_READ_HMAC_SECRET="replace-me-control-read-hmac-secret"
+
+# Signs and verifies Asset Intake readiness receipts.
+#
+# Deliberately separate from COMMAND_HMAC_SECRET: holding the command secret
+# must not be enough to mint evidence that provider readiness was checked, or an
+# authenticated caller could bypass the readiness gate by forging its own.
+READINESS_RECEIPT_HMAC_SECRET="replace-me-readiness-receipt-hmac-secret"
+
+# Optional. Enables /api/emergency/news; the route fails closed without it.
+# EMERGENCY_NEWS_HMAC_SECRET="replace-me-emergency-news-hmac-secret"
+
+# Optional. Asset Intake via Google Drive; configure exactly one credential source.
+# GOOGLE_DRIVE_ACCESS_TOKEN="replace-me"
+# GOOGLE_DRIVE_REFRESH_TOKEN="replace-me"
+# GOOGLE_DRIVE_CLIENT_ID="replace-me"
+# GOOGLE_DRIVE_CLIENT_SECRET="replace-me"
+# GOOGLE_DRIVE_SA_CLIENT_EMAIL="replace-me@example.iam.gserviceaccount.com"
+# GOOGLE_DRIVE_SA_PRIVATE_KEY="replace-me"
+
+# Optional. Origin allowlist for import_wordpress_asset; the command fails
+# closed until an installation that wants WordPress import sets it.
+# WORDPRESS_ASSET_ALLOWED_ORIGINS="https://legacy.example.com"
+
+# Optional. Generated-artifact intake adapter.
+# GENERATED_ARTIFACT_ORIGIN="https://artifacts.example.com"
+# GENERATED_ARTIFACT_TOKEN="replace-me"

@@ -173,6 +173,61 @@ The command matrix test enforces this: every advertised command must survive a
 JSON round trip, so a payload that cannot be expressed in JSON fails the build
 rather than shipping as a contract nobody can use.
 
+## The contract is enforced at the Worker, not only at the gate
+
+Everything above describes the gate. The gate is not the boundary.
+
+`/api/v1/commands` is an authenticated ingress that does not pass through it, so
+a rule enforced only in the gate is skipped by dispatching directly. The Worker
+therefore applies the same asset semantics itself, inside admission — before the
+job is claimed, before any provider fetch, and before any R2 or D1 write:
+
+- image-bearing without the flag → `ASSET_INTAKE_FLAG_MISSING`
+- not image-bearing with the flag → `ASSET_INTAKE_FLAG_UNEXPECTED`
+- provider intake without valid readiness evidence → refused
+- a canonical asset → no evidence required; no provider is involved
+
+The payload is parsed once in admission and that validated value decides both
+questions, via the same `command-assets.ts` the gate uses.
+
+### Readiness evidence has to be unforgeable
+
+The preflight receipt cannot serve as proof that readiness was checked: it is
+unsigned, so any caller holding the command secret could mint one and reach the
+mutation handler with no provider ever having been contacted.
+
+`READINESS_RECEIPT_HMAC_SECRET` is a **separate** secret — deliberately not the
+command secret, so holding the one an ingress needs is not enough to mint the
+other. The receipt binds:
+
+```text
+receiptVersion · commandDigest · contractVersion · siteId
+provider · readiness · issuedAt · expiresAt · HMAC signature
+```
+
+signed over a stable serialization and compared in constant time. Expiry, a
+future issue date, provider mismatch, site mismatch, digest mismatch and
+contract drift all fail closed.
+
+It is issued only by the control plane, and only when the shared readiness
+implementation actually returned `READY` for the command whose digest was
+supplied. A verdict the caller sends is never signed.
+
+### The digest excludes what attests it
+
+A receipt binds itself to the command digest, so including it would be circular.
+`ATTESTATION_CONTEXT_KEYS` — `preflight` and `readinessReceipt` — is defined
+once and used by both sides. It is exactly that and no wider: payload,
+`targetSite`, `ruleVersion`, `requiresAssetIntake`, `commandId` and `issuedAt`
+all still change the digest, which a test asserts in both directions.
+
+### Replay is unaffected
+
+Idempotency is resolved before admission, so a completed command replays even
+when its receipt has since expired or the provider has since gone unhealthy —
+the mutation already happened. Unknown, failed, running and digest-mismatched
+commands go through full admission, so this is not a general bypass.
+
 ## Recovering a lost dispatch response
 
 Commands are immutable and idempotent, but a dispatch can commit its mutation
