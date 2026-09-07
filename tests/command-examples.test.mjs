@@ -13,7 +13,8 @@ const { RULE_VERSION } = await loadRuleVersion();
 // values. Declared explicitly so a new example cannot skip the check.
 const REQUIRED_PLACEHOLDERS = {
   'create-news.json': [],
-  'replace-content-image.json': ['payload.contentId', 'payload.reference.providerAssetId']
+  'replace-content-image.json': ['payload.contentId', 'payload.reference.providerAssetId'],
+  'update-page-hero.json': ['payload.pageId', 'payload.sectionId']
 };
 
 const exampleFiles = (await readdir(examplesDir))
