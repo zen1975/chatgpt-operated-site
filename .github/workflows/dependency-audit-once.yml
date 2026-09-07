@@ -17,8 +17,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
-          cache: npm
+      - name: Generate candidate lockfile
+        run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
+      - run: npm run build
       - name: Production dependency audit
         shell: bash
         run: |
@@ -41,11 +43,11 @@ jobs:
         shell: bash
         run: |
           npm ls --all > dependency-tree.txt 2>&1 || true
-          cat dependency-tree.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: dependency-security-audit
+          name: dependency-security-remediation
           path: |
+            package-lock.json
             production-audit.json
             full-audit.json
             dependency-tree.txt
