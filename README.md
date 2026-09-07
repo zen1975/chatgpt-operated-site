@@ -12,7 +12,7 @@ The repository includes a simple English Astro corporate website together with t
 
 ```bash
 npm ci
-npm run build
+npm run verify   # build + contract checks
 ```
 
 Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance.
@@ -94,12 +94,23 @@ Client
 ## Documentation
 
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
 - [`docs/EXTENDING_SITE_OPERATIONS.md`](docs/EXTENDING_SITE_OPERATIONS.md) — adding new controlled site operations
 - [`AGENTS.md`](AGENTS.md) — operating contract for coding/operation agents
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — development setup and what the contract checks enforce
+- [`SECURITY.md`](SECURITY.md) — vulnerability reporting and the security design expectations
 
 ## Project status
 
 This repository is currently a **private OSS candidate** assembled from a reviewed clean extraction of the private production/development upstream. It is not ready for public release yet.
 
 Before public release it will be validated through clean installation, build and contract checks, disposable provisioning, and an actual ChatGPT-operated end-to-end site workflow including image handling.
+
+Clean installation, build, and contract checks now run on every push and pull
+request. Disposable provisioning and the end-to-end ChatGPT-operated workflow
+are still outstanding.
+
+## Licence
+
+[MIT](LICENSE).

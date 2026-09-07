@@ -4,6 +4,7 @@ import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { executeCommand } from '@/server/commands';
+import { RULE_VERSION } from '@/server/rule-version';
 
 const EmergencyNewsInput = z.object({
   requestId: z.string().min(8).max(120).regex(/^[A-Za-z0-9._-]+$/),
@@ -96,7 +97,7 @@ export const POST: APIRoute = async ({ request }) => {
       command: 'create_news' as const,
       issuedAt: timestamp,
       context: {
-        ruleVersion: '0.1.0',
+        ruleVersion: RULE_VERSION,
         targetSite: 'emergency-sheet'
       },
       payload: {
