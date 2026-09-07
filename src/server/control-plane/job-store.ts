@@ -247,9 +247,9 @@ export function versionFenceStatement(execution: CommandExecution, guard: Versio
  * twice: adding the lease fence shifted the guarded update from index 0 to 1,
  * and adding intake registration shifted it again.
  */
-export type NamedStatement = { readonly name: string; readonly statement: unknown };
+export type NamedStatement = { readonly name: string; readonly statement: D1PreparedStatement };
 
-export const named = (name: string, statement: unknown): NamedStatement => ({ name, statement });
+export const named = (name: string, statement: D1PreparedStatement): NamedStatement => ({ name, statement });
 
 /** Batch results, addressable only by name. */
 export type NamedResults = {
@@ -284,7 +284,7 @@ export async function fencedBatch(
   const all = [...prefix, ...statements];
   let results: unknown[];
   try {
-    results = await env.DB.batch(all.map((entry) => entry.statement) as never[]);
+    results = await env.DB.batch(all.map((entry) => entry.statement));
   } catch (error) {
     if (isLeaseFenceViolation(error)) {
       throw new CommandError('CONFLICT', 'COMMAND_LEASE_LOST', 'This attempt no longer holds the command lease; another attempt has taken over, so its changes were not applied.', false, { commandId: execution.commandId });
@@ -338,7 +338,9 @@ export function guardedSuccessStatement(
 /** Terminal success, for handlers that complete outside a batch. */
 export async function recordSuccess(execution: CommandExecution, result: unknown) {
   const outcome = await successStatement(execution, result).run();
-  assertOwnedRowAffected(execution, outcome);
+  // Same rule as inside a batch: the completion must affect exactly the one row
+  // this lease owns.
+  assertOwnedRowAffected(execution, { get: () => outcome, changes: () => outcome.meta?.changes, names: () => [SUCCESS_STATEMENT_NAME] });
 }
 
 /**

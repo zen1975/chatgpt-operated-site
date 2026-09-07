@@ -59,7 +59,7 @@ type PageSection = ReturnType<typeof parseSection>;
 // Returns a preparation, not a finished asset: the statements travel with it so
 // the page command can commit them in its own fenced batch and remain the only
 // writer that finalizes the job.
-type PageAssetResolver = (reference: unknown, role: string) => Promise<{ result: { assetId: string; reused: boolean }; statements: unknown[] }>;
+type PageAssetResolver = (reference: unknown, role: string) => Promise<{ result: { assetId: string; reused: boolean }; statements: D1PreparedStatement[] }>;
 
 async function getSections(pageId: string): Promise<PageSection[]> {
   const rows = await env.DB.prepare('SELECT id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at FROM page_sections WHERE page_id=? ORDER BY position,id').bind(pageId).all<SectionRow>();
@@ -184,7 +184,7 @@ function positionStatements(pageId: string, sections: Array<{ id: string; positi
   ];
 }
 
-const namedMutations = (statements: unknown[]): NamedStatement[] => statements.map((statement, index) => named(`mutation-${index}`, statement));
+const namedMutations = (statements: D1PreparedStatement[]): NamedStatement[] => statements.map((statement, index) => named(`mutation-${index}`, statement));
 
 async function commitPageMutation(execution: CommandExecution, page: PageRow, expectedVersion: number, action: string, before: unknown, after: unknown, statements: NamedStatement[], result: unknown, sectionGuard?: VersionGuard) {
   const now = new Date().toISOString();
@@ -394,7 +394,7 @@ export async function executePageCommand(execution: CommandExecution, input: unk
     const page = { id: pageId, slug: payload.slug, title: payload.title, pageType: payload.pageType, templateProfile: payload.templateProfile, status: payload.status, seoTitle: payload.seoTitle, seoDescription: payload.seoDescription, version: 1, createdAt: now, updatedAt: now };
     const after = { page, sections, assetIds: collectSectionAssetIds(sections) };
     const result = { pageId, slug: page.slug, version: 1, action: 'create_page' };
-    const statements: unknown[] = [env.DB.prepare('INSERT INTO pages (id,slug,title,page_type,template_profile,status,seo_title,seo_description,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(page.id, page.slug, page.title, page.pageType, page.templateProfile, page.status, page.seoTitle, page.seoDescription, page.version, now, now)];
+    const statements: D1PreparedStatement[] = [env.DB.prepare('INSERT INTO pages (id,slug,title,page_type,template_profile,status,seo_title,seo_description,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(page.id, page.slug, page.title, page.pageType, page.templateProfile, page.status, page.seoTitle, page.seoDescription, page.version, now, now)];
     for (const section of sections) statements.push(env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(section.id, section.pageId, section.sectionType, section.position, section.variant, JSON.stringify(section.props), section.status, section.version, now, now));
     statements.push(revisionStatement(commandId, page.id, 'create_page', null, after, now), jobStatement(execution, result, now));
     const results = await fencedBatch(execution, statements.map((statement, index) => named(`create-page-${index}`, statement)));
@@ -427,7 +427,7 @@ export async function executePageCommand(execution: CommandExecution, input: unk
     await assertSectionAssets(inserted.sectionType, inserted.props);
     const sections = [...current.map((section) => ({ ...section })), inserted].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id)).map((section, index) => ({ ...section, position: index }));
     const before = snapshot(page, current), nextVersion = page.version + 1, after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: id, version: nextVersion, action: 'insert_page_section' };
-    const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, sections), env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id, page.id, inserted.sectionType, position, inserted.variant, JSON.stringify(inserted.props), inserted.status, 1, now, now)];
+    const statements: D1PreparedStatement[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, sections), env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id, page.id, inserted.sectionType, position, inserted.variant, JSON.stringify(inserted.props), inserted.status, 1, now, now)];
     return commitPageMutation(execution, page, payload.expectedVersion, 'insert_page_section', before, after, namedMutations(statements), result);
   }
 
@@ -444,7 +444,7 @@ export async function executePageCommand(execution: CommandExecution, input: unk
     const payload = RemovePageSectionPayload.parse(input), page = await getPage(payload.pageId), current = await getSections(page.id), section = sectionById(current, payload.sectionId), policy = policyFor(page);
     requirePermission(policy, 'remove'); checkPageVersion(page, payload.expectedVersion); checkSectionVersion(section, payload.expectedSectionVersion); assertModulePolicy(policy, section.sectionType, section.id);
     const remaining = current.filter((item) => item.id !== section.id).map((item, index) => ({ ...item, position: index })), before = snapshot(page, current), now = new Date().toISOString(), nextVersion = page.version + 1, after = snapshot({ ...page, version: nextVersion, updated_at: now }, remaining, nextVersion), result = { pageId: page.id, sectionId: section.id, version: nextVersion, action: 'remove_page_section' };
-    const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, remaining), env.DB.prepare('DELETE FROM page_sections WHERE id=? AND page_id=? AND version=?').bind(section.id, page.id, payload.expectedSectionVersion)];
+    const statements: D1PreparedStatement[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, remaining), env.DB.prepare('DELETE FROM page_sections WHERE id=? AND page_id=? AND version=?').bind(section.id, page.id, payload.expectedSectionVersion)];
     return commitPageMutation(execution, page, payload.expectedVersion, 'remove_page_section', before, after, namedMutations(statements), result);
   }
 
@@ -467,7 +467,7 @@ export async function executePageCommand(execution: CommandExecution, input: unk
     if (!slot) throw pageError('PAGE_ASSET_PATH_INVALID', `Asset path is not registered for ${section.sectionType}: ${payload.assetPath}`);
     let assetId = payload.assetId;
     const assetReference = payload.reference;
-    let intakeStatements: unknown[] = [];
+    let intakeStatements: D1PreparedStatement[] = [];
     if (assetReference) {
       if (slot.role !== assetReference.intendedRole) throw pageError('PAGE_ASSET_ROLE_MISMATCH', 'Asset reference role does not match the registered Page module slot.');
       if (!options.resolveAssetReference) throw pageError('PAGE_ASSET_INTAKE_UNAVAILABLE', 'Asset provider intake is not available for this runtime.');
@@ -478,9 +478,17 @@ export async function executePageCommand(execution: CommandExecution, input: unk
       intakeStatements = resolved.statements;
     }
     if (!assetId) throw pageError('PAGE_ASSET_REQUIRED', 'A canonical Asset ID or provider reference is required.');
-    const asset = await env.DB.prepare("SELECT id FROM assets WHERE id=? AND validation_status='validated' AND r2_key IS NOT NULL AND bytes > 0 LIMIT 1").bind(assetId).first<{ id: string }>();
-    if (!asset) throw pageError('PAGE_ASSET_UNUSABLE', 'The requested Asset is missing or unavailable.');
-    const props = cloneWithAssetPath(section.props, payload.assetPath, assetId); validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props }, section.id); await assertSectionAssets(section.sectionType, props);
+    // A canonical id names an asset that must already exist. A prepared
+    // reference is registered by this command's own fenced batch, so querying
+    // for it now would look for a row this command has not written yet -- which
+    // is what made every first-time provider-backed section replacement fail.
+    // Its validity comes from the preparation and from that registration.
+    if (!assetReference) {
+      const asset = await env.DB.prepare("SELECT id FROM assets WHERE id=? AND validation_status='validated' AND r2_key IS NOT NULL AND bytes > 0 LIMIT 1").bind(assetId).first<{ id: string }>();
+      if (!asset) throw pageError('PAGE_ASSET_UNUSABLE', 'The requested Asset is missing or unavailable.');
+    }
+    const props = cloneWithAssetPath(section.props, payload.assetPath, assetId); validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props }, section.id); // assertSectionAssets reads D1 too, so it is likewise skipped for an asset this batch is about to register.
+    if (!assetReference) await assertSectionAssets(section.sectionType, props);
     const now = new Date().toISOString(), nextVersion = page.version + 1, nextSectionVersion = section.version + 1, updated = { ...section, props, version: nextSectionVersion, updatedAt: now }, sections = current.map((item) => item.id === section.id ? updated : item), before = snapshot(page, current), after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: section.id, assetId, version: nextVersion, sectionVersion: nextSectionVersion, action: 'replace_page_section_asset' };
     const statements = [...intakeStatements, pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)];
     return await commitPageMutation(execution, page, payload.expectedVersion, 'replace_page_section_asset', before, after, namedMutations(statements), result);
@@ -495,7 +503,7 @@ export async function executePageCommand(execution: CommandExecution, input: unk
     const restored = await validateSnapshot(raw, page.id);
     for (const section of restored.sections) validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props: section.props }, section.id);
     const now = new Date().toISOString(), nextVersion = page.version + 1, restoredPage = { ...restored.page, version: nextVersion, updatedAt: now }, restoredSections = restored.sections.map((section, position) => ({ ...section, position, updatedAt: now })), before = snapshot(page, current), after = { page: restoredPage, sections: restoredSections, assetIds: collectSectionAssetIds(restoredSections) }, result = { pageId: page.id, version: nextVersion, revisionId: payload.revisionId, action: 'rollback_page' };
-    const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, 'title=?,page_type=?,template_profile=?,status=?,seo_title=?,seo_description=?', [restoredPage.title, restoredPage.pageType, restoredPage.templateProfile, restoredPage.status, restoredPage.seoTitle, restoredPage.seoDescription], nextVersion, now), env.DB.prepare('DELETE FROM page_sections WHERE page_id=?').bind(page.id)];
+    const statements: D1PreparedStatement[] = [pageUpdateStatement(page, payload.expectedVersion, 'title=?,page_type=?,template_profile=?,status=?,seo_title=?,seo_description=?', [restoredPage.title, restoredPage.pageType, restoredPage.templateProfile, restoredPage.status, restoredPage.seoTitle, restoredPage.seoDescription], nextVersion, now), env.DB.prepare('DELETE FROM page_sections WHERE page_id=?').bind(page.id)];
     for (const section of restoredSections) statements.push(env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(section.id, page.id, section.sectionType, section.position, section.variant, JSON.stringify(section.props), section.status, section.version, section.createdAt, section.updatedAt));
     return commitPageMutation(execution, page, payload.expectedVersion, 'rollback_page', before, after, namedMutations(statements), result);
   }

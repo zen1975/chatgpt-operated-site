@@ -263,8 +263,15 @@ guarded update from index 0 to 1, and adding intake registration shifted it
 again, at which point an intake statement's one-row result could be mistaken for
 a successful version update.
 
-`fencedBatch` takes `NamedStatement`s and returns results addressable only by
-name. The type has no index signature, so positional access does not compile,
+`fencedBatch` takes `NamedStatement`s -- whose `statement` is a real
+`D1PreparedStatement`, not `unknown` -- and returns results addressable only by
+name.
+
+That typing matters. `tsconfig` referenced `@cloudflare/workers-types`, which is
+not installed, so every binding resolved to `any` and a raw statement could be
+passed where a named one was required while the build stayed green. The runtime
+surface this project uses is now declared in `src/env.d.ts`, which is what lets
+the compiler reject the mistake instead of the database receiving `undefined`. The type has no index signature, so positional access does not compile,
 and contract tests fail the build on any `batch[n]`/`results[n]` pattern or on a
 cast that would reopen one.
 
@@ -277,6 +284,20 @@ exactly the one job row that lease owns.
 
 R2 objects are content-addressed, so a repeated write is harmless -- but their
 D1 registration is fenced like everything else.
+
+### A prepared asset is validated by its preparation, not by a lookup
+
+An asset named by canonical id must already exist, and is verified against D1.
+An asset arriving as a provider reference is registered by the command's own
+fenced batch, so querying D1 for it beforehand looks for a row that has not been
+written yet -- which made every first-time provider-backed replacement fail
+while orphaning the object it had just uploaded.
+
+The two paths are therefore separate in `replace_asset`,
+`replace_product_asset` and `replace_page_section_asset`: the canonical path
+keeps its existence check (`ASSET_NOT_FOUND`, `PAGE_ASSET_UNUSABLE`), and the
+prepared path uses the validated preparation result and lets the registration
+prove itself by landing in the same batch.
 
 ### Only the outermost execution finalizes a job
 

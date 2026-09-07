@@ -8,8 +8,13 @@ function positiveLimit(value: string | null) {
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 100) : 50;
 }
 
-function nextCursor(rows: Array<{ id: string }>, limit: number) {
-  return rows.length === limit ? rows[rows.length - 1].id : null;
+// Rows come back from D1 as Record<string, unknown>, so the cursor is read
+// defensively rather than by asserting a shape the query does not guarantee.
+function nextCursor(rows: Array<Record<string, unknown>>, limit: number) {
+  if (rows.length !== limit) return null;
+  const last = rows[rows.length - 1];
+  const id = last?.id ?? last?.assetId;
+  return typeof id === 'string' ? id : null;
 }
 
 function assetDto(row: Row, available: boolean) {
