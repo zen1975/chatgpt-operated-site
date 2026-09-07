@@ -1,0 +1,40 @@
+---
+import '@/styles/global.css';
+import '@/styles/asset-renderer.css';
+import '@/styles/page-composition.css';
+import SiteHeader from '@/components/SiteHeader.astro';
+import SiteFooter from '@/components/SiteFooter.astro';
+interface Props { title: string; description?: string; canonical?: string; ogImage?: string; ogType?: 'website'|'article'; robots?: string; jsonLd?: Record<string, unknown>; }
+const { title, description = '', canonical, ogImage = '/assets/default-og.svg', ogType = 'website', robots = 'index,follow', jsonLd } = Astro.props;
+const origin = Astro.url.origin;
+const canonicalUrl = canonical ? new URL(canonical, origin).toString() : Astro.url.toString();
+const jsonLdText = jsonLd ? JSON.stringify(jsonLd).replaceAll('<', '\\u003c') : null;
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width" />
+  <title>{title}</title>
+  {description && <meta name="description" content={description} />}
+  <meta name="robots" content={robots} />
+  <link rel="canonical" href={canonicalUrl} />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta property="og:title" content={title} />
+  {description && <meta property="og:description" content={description} />}
+  <meta property="og:url" content={canonicalUrl} />
+  <meta property="og:type" content={ogType} />
+  {ogImage && <meta property="og:image" content={new URL(ogImage, origin).toString()} />}
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={title} />
+  {description && <meta name="twitter:description" content={description} />}
+  {ogImage && <meta name="twitter:image" content={new URL(ogImage, origin).toString()} />}
+  {jsonLdText && <script type="application/ld+json" set:html={jsonLdText} />}
+</head>
+<body>
+  <slot name="global-top" />
+  <SiteHeader />
+  <slot />
+  <SiteFooter />
+</body>
+</html>

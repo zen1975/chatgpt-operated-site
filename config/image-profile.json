@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "profileName": "default-corporate-image-profile",
+  "formats": {
+    "preferred": ["webp", "avif"],
+    "fallback": ["jpg", "png"]
+  },
+  "slots": {
+    "article.featured": {
+      "aspectRatio": "16:9",
+      "recommendedSize": "1600x900",
+      "maxFileSizeKB": 500,
+      "crop": "center-safe",
+      "safeArea": "center 80%",
+      "textInImage": "prohibited"
+    },
+    "article.body": {
+      "aspectRatio": "3:2",
+      "recommendedSize": "1200x800",
+      "maxFileSizeKB": 450,
+      "crop": "content-aware",
+      "safeArea": "center 85%",
+      "textInImage": "prohibited"
+    },
+    "article.diagram": {
+      "aspectRatio": "4:3",
+      "recommendedSize": "1200x900",
+      "maxFileSizeKB": 500,
+      "crop": "none-preferred",
+      "safeArea": "full",
+      "textInImage": "separate-layer-preferred"
+    },
+    "article.caseStudy": {
+      "aspectRatio": "3:2",
+      "recommendedSize": "1200x800",
+      "maxFileSizeKB": 500,
+      "crop": "content-aware",
+      "safeArea": "center 85%",
+      "textInImage": "prohibited"
+    },
+    "cta.banner": {
+      "aspectRatio": "3:1",
+      "recommendedSize": "1500x500",
+      "maxFileSizeKB": 500,
+      "crop": "responsive-safe",
+      "safeArea": "center 65%",
+      "textInImage": "separate-layer-preferred"
+    },
+    "cta.card": {
+      "aspectRatio": "4:3",
+      "recommendedSize": "1200x900",
+      "maxFileSizeKB": 450,
+      "crop": "center-safe",
+      "safeArea": "center 75%",
+      "textInImage": "separate-layer-preferred"
+    }
+  },
+  "sourcePriority": [
+    "user-provided",
+    "existing-site-asset",
+    "original-company-asset",
+    "original-diagram",
+    "generated",
+    "licensed-stock"
+  ],
+  "generatedImages": {
+    "enabled": true,
+    "validationRequired": true,
+    "logoGeneration": "prohibited",
+    "watermarks": "prohibited",
+    "defaultTextPolicy": "prohibited"
+  },
+  "notes": [
+    "各案件では実際のcomponent / template仕様に合わせてslot値を上書きする",
+    "このdefault値を実サイトの絶対仕様として扱わない",
+    "既存componentに異なるratio/sizeがある場合は実装側仕様を優先してprofileを更新する"
+  ]
+}

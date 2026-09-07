@@ -1,0 +1,13 @@
+---
+import TrustedPageModule from '@/components/page-modules/TrustedPageModule.astro';
+import { derivePageStructuredData } from '@/server/projections';
+import type { PageComposition } from '@/server/page-composition/renderer';
+interface Props { composition: PageComposition; }
+const { composition } = Astro.props;
+const pageJsonLd = derivePageStructuredData(composition);
+const pageJsonLdText = pageJsonLd ? JSON.stringify(pageJsonLd).replaceAll('<', '\\u003c') : null;
+---
+<main class="page-composition" data-page-id={composition.page.id} data-page-version={composition.page.version}>
+  {composition.sections.map((section) => <TrustedPageModule section={section} />)}
+</main>
+{pageJsonLdText && <script type="application/ld+json" set:html={pageJsonLdText} />}
