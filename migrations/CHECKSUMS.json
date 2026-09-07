@@ -1,0 +1,10 @@
+{
+  "$comment": "Content digests of applied migrations. Regenerate with `npm run migrations:checksums` ONLY when adding a new migration. A changed digest for an existing migration means an already-applied file was edited, which silently diverges existing installations from fresh ones.",
+  "checksums": {
+    "0001_initial.sql": "sha256:312c0b69879f28546314b3be8dceec26a7a1083dade7fb200556a63699d7906a",
+    "0002_add_content_type.sql": "sha256:d14077c7e99b6c57f786736c92c08542d095887e0f00b4bdb4f6f7c4b8359659",
+    "0003_asset_engine.sql": "sha256:95b63790c42d5161249cb1cb3f511d7434635a7aec3fc72bf15eed44cd51b0a9",
+    "0004_page_composition.sql": "sha256:8d67ceb9253e8f64a806521f21e0a370c297d20ed36b558e1f1864e78fc5faa0",
+    "0005_unified_content_projection.sql": "sha256:0d7c6845efca01c4c4fba104123391b4b0f98bafc6f7b4c0f37dfb1b29bb9de0"
+  }
+}

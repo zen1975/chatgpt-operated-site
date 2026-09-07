@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Creates news or article content. categoryTermIds and tagTermIds must each contain unique ids, and the two arrays must not share an id: a term belongs to exactly one taxonomy and both arrays are inserted into the same content_term_links key space.",
   "type": "object",
   "properties": {
     "title": {

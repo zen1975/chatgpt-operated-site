@@ -9,6 +9,13 @@ const examplesDir = path.join(repoRoot, 'examples', 'commands');
 const contracts = await loadCommandContracts();
 const { RULE_VERSION } = await loadRuleVersion();
 
+// Fields that identify a specific installation and must never ship as real
+// values. Declared explicitly so a new example cannot skip the check.
+const REQUIRED_PLACEHOLDERS = {
+  'create-news.json': [],
+  'replace-content-image.json': ['payload.contentId', 'payload.reference.providerAssetId']
+};
+
 const exampleFiles = (await readdir(examplesDir))
   .filter((name) => name.endsWith('.json'))
   .sort();
@@ -43,11 +50,39 @@ for (const file of exampleFiles) {
     );
   });
 
-  test(`${file} keeps placeholders obvious`, () => {
-    const serialized = JSON.stringify(raw);
-    for (const match of serialized.matchAll(/REPLACE_WITH_[A-Z_]+/g)) {
-      assert.match(match[0], /^REPLACE_WITH_[A-Z_]+$/);
+  // Re-matching the strings that already matched the pattern proves nothing:
+  // swapping a placeholder for a production identifier yields no matches and
+  // passes. The fields that must stay placeholders are declared per example
+  // instead, and every example must declare its expectation.
+  test(`${file} keeps its installation-specific fields as placeholders`, () => {
+    const expected = REQUIRED_PLACEHOLDERS[file];
+    assert.ok(expected, `${file} must declare its required placeholder paths in REQUIRED_PLACEHOLDERS (use [] for an example with none)`);
+
+    for (const pointer of expected) {
+      const value = pointer.split('.').reduce((node, key) => (node === undefined ? undefined : node[key]), raw);
+      assert.equal(typeof value, 'string', `${file}: ${pointer} must exist and be a string`);
+      assert.match(
+        value,
+        /^REPLACE_WITH_[A-Z_]+$/,
+        `${file}: ${pointer} must remain an obvious placeholder, never a real identifier from an installation`
+      );
     }
+  });
+
+  // Catches a real identifier substituted into a field nobody declared.
+  test(`${file} contains no identifier-shaped values`, () => {
+    const findings = [];
+    const walk = (node, pointer) => {
+      if (typeof node === 'string') {
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(node)) findings.push(`${pointer}: uuid`);
+        else if (/^[0-9a-f]{32,}$/i.test(node)) findings.push(`${pointer}: long hex`);
+        else if (/^[A-Za-z0-9_-]{28,}$/.test(node) && !node.startsWith('REPLACE_WITH_')) findings.push(`${pointer}: opaque provider id`);
+      } else if (node && typeof node === 'object') {
+        for (const [key, child] of Object.entries(node)) walk(child, pointer ? `${pointer}.${key}` : key);
+      }
+    };
+    walk(raw, '');
+    assert.deepEqual(findings, [], `${file} looks like it carries real identifiers:\n${findings.join('\n')}`);
   });
 }
 

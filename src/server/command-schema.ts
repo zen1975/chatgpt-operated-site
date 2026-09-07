@@ -92,7 +92,27 @@ export const CreateNewsPayload = z.object({
   seoTitle: z.string().max(60).nullable().optional(),
   seoDescription: z.string().max(160).nullable().optional(),
   expectedVersion: z.number().int().positive().nullable().optional()
-}).strict();
+})
+  .strict()
+  // Per-array uniqueness is not enough: the create path concatenates both
+  // arrays and inserts one row per id, so an id present in *both* still writes
+  // the same (content_type, content_id, term_id) key twice. A term belongs to
+  // exactly one taxonomy, so overlap is malformed input rather than something
+  // to silently deduplicate.
+  //
+  // JSON Schema has no keyword for "these two arrays are disjoint", so the rule
+  // is published as prose on the generated document instead. The asymmetry is
+  // deliberate and fails safe: a consumer that misses it sends a command the
+  // Worker rejects with a correctable error, rather than one the Worker accepts
+  // and the database refuses.
+  .refine(
+    (value) => !value.categoryTermIds.some((id) => value.tagTermIds.includes(id)),
+    'categoryTermIds and tagTermIds must not share a term id'
+  )
+  .meta({
+    description:
+      'Creates news or article content. categoryTermIds and tagTermIds must each contain unique ids, and the two arrays must not share an id: a term belongs to exactly one taxonomy and both arrays are inserted into the same content_term_links key space.'
+  });
 
 export const CreateTimedContentPayload = z.object({
   type: z.enum(['banner','notice','emergency','cta','popup','seasonal']),
