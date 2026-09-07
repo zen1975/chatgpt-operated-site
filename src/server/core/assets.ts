@@ -179,7 +179,7 @@ export type AssetIntakePreparation = {
     variant: string;
     reused: boolean;
   };
-  statements: unknown[];
+  statements: D1PreparedStatement[];
 };
 
 /**

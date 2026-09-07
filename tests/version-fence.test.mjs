@@ -374,3 +374,57 @@ test('the version guard is applied by the batch, not checked afterwards', async 
     );
   }
 });
+
+test('every fencedBatch caller is enumerated and passes named statements', async () => {
+  const files = [];
+  const walk = async (dir) => {
+    for (const entry of await readdir(path.join(repoRoot, dir), { withFileTypes: true })) {
+      const next = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (entry.name.endsWith('.ts')) files.push(next);
+    }
+  };
+  await walk('src/server');
+
+  // Enumerated, not spot-checked. Each call site is inspected together with the
+  // lines that build its argument, so a variable is only accepted when it was
+  // itself assembled from named().
+  const callers = [];
+  for (const file of files) {
+    if (file.endsWith('job-store.ts')) continue;
+    const source = await readFile(path.join(repoRoot, file), 'utf8');
+    const lines = source.split('\n');
+    lines.forEach((line, index) => {
+      if (!line.includes('fencedBatch(execution')) return;
+      const window = lines.slice(Math.max(0, index - 12), index + 12).join('\n');
+      callers.push({ file, line: index + 1, window });
+    });
+  }
+
+  assert.ok(callers.length >= 7, `expected every fencedBatch caller to be enumerated; found ${callers.length}`);
+  for (const caller of callers) {
+    assert.match(
+      caller.window,
+      /named\(|namedMutations\(/,
+      `${caller.file}:${caller.line}: fencedBatch must receive statements built with named()`
+    );
+  }
+});
+
+test('no statement array is typed loosely enough to hide a raw statement', async () => {
+  const files = [];
+  const walk = async (dir) => {
+    for (const entry of await readdir(path.join(repoRoot, dir), { withFileTypes: true })) {
+      const next = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (entry.name.endsWith('.ts')) files.push(next);
+    }
+  };
+  await walk('src/server');
+
+  for (const file of files) {
+    const source = await readFile(path.join(repoRoot, file), 'utf8');
+    assert.ok(!/statements:\s*unknown\[\]/.test(source), `${file}: a statement array typed as unknown[] lets a raw statement through`);
+    assert.ok(!/as never\[\]/.test(source), `${file}: "as never[]" hides the very mismatch these types exist to catch`);
+  }
+});

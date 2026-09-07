@@ -1,9 +1,15 @@
 {
   "extends": "astro/tsconfigs/strict",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types"],
     "baseUrl": ".",
-    "paths": {"@/*": ["src/*"]}
+    "paths": {
+      "@/*": [
+        "src/*"
+      ]
+    }
   },
-  "exclude": ["dist", "node_modules"]
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
 }

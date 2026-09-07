@@ -21,8 +21,12 @@ const workersStub = {
       namespace: 'cf-stub'
     }));
     pluginBuild.onLoad({ filter: /.*/, namespace: 'cf-stub' }, () => ({
+      // Tests that exercise real handlers install a runtime on
+      // globalThis.__WORKERS_TEST_ENV__; anything else still fails loudly.
       contents: `export const env = new Proxy({}, {
         get(_target, property) {
+          const installed = globalThis.__WORKERS_TEST_ENV__;
+          if (installed && property in installed) return installed[property];
           throw new Error('cloudflare:workers env.' + String(property) + ' is not available outside the Workers runtime.');
         }
       });`,

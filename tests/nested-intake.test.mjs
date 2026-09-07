@@ -267,11 +267,11 @@ test('every provider-backed parent commits intake statements in its own batch', 
 
   for (const [label, source] of [['replace_asset', commands], ['product asset', product], ['page section asset', page]]) {
     assert.match(source, /intakeStatements/, `${label} must carry the intake's statements into its own batch`);
-    assert.match(source, /\.\.\.intakeStatements/, `${label} must spread them into its statement list`);
+    assert.ok(/\.\.\.intakeStatements|registration: intakeStatements/.test(source), `${label} must carry the intake registration into its own fenced batch`);
   }
 
   // And the resolver hands back a preparation rather than a finished asset.
   assert.match(commands, /Promise<AssetIntakePreparation>/);
-  assert.match(product, /result: \{ assetId: string; reused: boolean \}; statements: unknown\[\]/);
-  assert.match(page, /result: \{ assetId: string; reused: boolean \}; statements: unknown\[\]/);
+  assert.match(product, /result: \{ assetId: string; reused: boolean \}; statements: D1PreparedStatement\[\]/);
+  assert.match(page, /result: \{ assetId: string; reused: boolean \}; statements: D1PreparedStatement\[\]/);
 });

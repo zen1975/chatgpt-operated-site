@@ -128,7 +128,31 @@ function contentSearchProjection(contentId:string, contentType:ContentRow['conte
   `).bind(now, contentId, contentType);
 }
 
-async function commitContentMutation(execution:CommandExecution, row:ContentRow, expectedVersion:number, action:string, updates:string, binds:unknown[], after:Record<string,unknown>, extraStatements:NamedStatement[] = [], before:Record<string,unknown> = snapshot(row)) {
+/**
+ * Commit a versioned content mutation.
+ *
+ * The statement order matters and is therefore explicit rather than a single
+ * opaque list:
+ *
+ *   registration -> the guarded UPDATE -> statements that depend on the new
+ *   version -> projection -> revision -> the sole success transition
+ *
+ * Asset registration must precede the attachment that references it, and the
+ * attachment is guarded on the *next* version, so it has to follow the UPDATE
+ * that produces it. Passing both through one array put them on the wrong side
+ * of that line.
+ */
+async function commitContentMutation(
+  execution:CommandExecution,
+  row:ContentRow,
+  expectedVersion:number,
+  action:string,
+  updates:string,
+  binds:unknown[],
+  after:Record<string,unknown>,
+  extra: { registration?: NamedStatement[]; afterUpdate?: NamedStatement[] } = {},
+  before:Record<string,unknown> = snapshot(row)
+) {
   const nextVersion = expectedVersion + 1;
   const now = new Date().toISOString();
   const setClause = updates ? `${updates}, version=?, updated_at=?` : 'version=?, updated_at=?';
@@ -140,8 +164,9 @@ async function commitContentMutation(execution:CommandExecution, row:ContentRow,
   // The version guard is a fence, not an after-the-fact row count: if the
   // content has moved on, the batch fails and nothing commits.
   const results = await fencedBatch(execution, [
-    ...extraStatements,
+    ...(extra.registration ?? []),
     named('domain-update', update),
+    ...(extra.afterUpdate ?? []),
     named('projection', contentSearchProjection(row.id,row.content_type,now)),
     named('revision', revision),
     named(SUCCESS_STATEMENT_NAME, job)
@@ -448,7 +473,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       };
 
       await fencedBatch(execution, [
-        env.DB.prepare(
+        named('domain-insert',         env.DB.prepare(
           `INSERT INTO taxonomy_terms
            (id,taxonomy_id,parent_id,name,slug,description,canonical_path,sort_order,seo_title,seo_description,status)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)`
@@ -464,9 +489,8 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           p.seoTitle ?? null,
           p.seoDescription ?? null,
           'published'
-        ),
-
-        env.DB.prepare(
+        )),
+        named('projection', env.DB.prepare(
           `INSERT INTO content_revisions
            (id,content_type,content_id,action,before_json,after_json,command_id,created_at)
            VALUES (?,?,?,?,?,?,?,?)`
@@ -479,9 +503,8 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           JSON.stringify(after),
           cmd.commandId,
           now
-        ),
-
-        successStatement(execution, result, now),
+        )),
+        named('revision', successStatement(execution, result, now))
       ]);
 
       return {
@@ -536,14 +559,14 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       if (changes.excerpt !== undefined) { fields.push('excerpt=?'); binds.push(changes.excerpt); }
       if (changes.blocks !== undefined) { fields.push('blocks_json=?'); binds.push(JSON.stringify(changes.blocks)); }
       const after={...before,...changes,blocks:changes.blocks ?? JSON.parse(row.blocks_json)};
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'update',fields.join(','),binds,after,[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'update',fields.join(','),binds,after,{},before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'archive_content') {
       const p=ArchiveContentPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row);
       checkVersion(row,p.expectedVersion);
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'archive','status=?',['archived'],{...before,status:'archived'},[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'archive','status=?',['archived'],{...before,status:'archived'},{},before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -552,13 +575,13 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       if (p.endsAt && p.endsAt <= p.startsAt) throw new CommandError('USER_CORRECTABLE','INVALID_PUBLISH_WINDOW','endsAt must be after startsAt');
       const row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
       const now=new Date().toISOString(), status=p.startsAt > now ? 'scheduled' : 'published';
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'schedule','starts_at=?,ends_at=?,published_at=?,status=?',[p.startsAt,p.endsAt ?? null,p.startsAt,status],{...before,starts_at:p.startsAt,ends_at:p.endsAt ?? null,published_at:p.startsAt,status},[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'schedule','starts_at=?,ends_at=?,published_at=?,status=?',[p.startsAt,p.endsAt ?? null,p.startsAt,status],{...before,starts_at:p.startsAt,ends_at:p.endsAt ?? null,published_at:p.startsAt,status},{},before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'update_seo') {
       const p=UpdateSeoPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'update_seo','seo_title=?,seo_description=?',[p.seoTitle,p.seoDescription],{...before,seo_title:p.seoTitle,seo_description:p.seoDescription},[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'update_seo','seo_title=?,seo_description=?',[p.seoTitle,p.seoDescription],{...before,seo_title:p.seoTitle,seo_description:p.seoDescription},{},before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -585,7 +608,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         env.DB.prepare(`DELETE FROM content_assets WHERE content_type=? AND content_id=? AND EXISTS (SELECT 1 FROM news WHERE id=? AND content_type=? AND version=?)`).bind(p.contentType,p.contentId,p.contentId,p.contentType,nextVersion),
         ...assetAssociations.map((value) => env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,value.asset_id,value.role,value.position,new Date().toISOString(),p.contentId,p.contentType,nextVersion))
       ];
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'rollback','title=?,excerpt=?,blocks_json=?,status=?,published_at=?,starts_at=?,ends_at=?,seo_title=?,seo_description=?',[restored.title,restored.excerpt ?? null,JSON.stringify(blocks),restored.status ?? row.status,restored.published_at ?? restored.publishedAt ?? row.published_at,restored.starts_at ?? restored.startsAt ?? row.starts_at,restored.ends_at ?? restored.endsAt ?? row.ends_at,restored.seo_title ?? restored.seo?.seoTitle ?? row.seo_title,restored.seo_description ?? restored.seo?.seoDescription ?? row.seo_description],{...restored,taxonomyTermIds,assetAssociations,blocks},relationStatements,before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'rollback','title=?,excerpt=?,blocks_json=?,status=?,published_at=?,starts_at=?,ends_at=?,seo_title=?,seo_description=?',[restored.title,restored.excerpt ?? null,JSON.stringify(blocks),restored.status ?? row.status,restored.published_at ?? restored.publishedAt ?? row.published_at,restored.starts_at ?? restored.startsAt ?? row.starts_at,restored.ends_at ?? restored.endsAt ?? row.ends_at,restored.seo_title ?? restored.seo?.seoTitle ?? row.seo_title,restored.seo_description ?? restored.seo?.seoDescription ?? row.seo_description],{...restored,taxonomyTermIds,assetAssociations,blocks},{ afterUpdate: relationStatements.map((statement, index) => named(`rollback-relation-${index}`, statement)) },before);
       return {success:true,commandId:cmd.commandId,result:{...result,revisionId:p.revisionId}};
     }
 
@@ -594,7 +617,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       const asset=await env.DB.prepare('SELECT id FROM assets WHERE id=? LIMIT 1').bind(p.assetId).first<{id:string}>();
       if (!asset) throw new CommandError('USER_CORRECTABLE','ASSET_NOT_FOUND','The requested asset was not found.');
       const extra=env.DB.prepare(`INSERT OR IGNORE INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,p.assetId,p.role,p.position,new Date().toISOString(),p.contentId,p.contentType,p.expectedVersion+1);
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'attach_asset','',[],{...before,assetAssociations:[...before.assetAssociations as Array<Record<string,unknown>>,{asset_id:p.assetId,role:p.role,position:p.position}]},[extra],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'attach_asset','',[],{...before,assetAssociations:[...before.assetAssociations as Array<Record<string,unknown>>,{asset_id:p.assetId,role:p.role,position:p.position}]},{ afterUpdate: [named('asset-attach', extra)] },before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -625,7 +648,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       const remove=env.DB.prepare(`DELETE FROM content_assets WHERE content_type=? AND content_id=? AND role=? AND position=? AND EXISTS (SELECT 1 FROM news WHERE id=? AND content_type=? AND version=?)`).bind(p.contentType,p.contentId,p.role,p.position,p.contentId,p.contentType,p.expectedVersion+1);
       const add=env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,assetId,p.role,p.position,when,p.contentId,p.contentType,p.expectedVersion+1);
       const associations=(before.assetAssociations as Array<Record<string,unknown>>).filter((association) => !(association.role === p.role && association.position === p.position));
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[...intakeStatements,named('asset-detach',remove),named('asset-attach',add)],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},{ registration: intakeStatements, afterUpdate: [named('asset-detach',remove),named('asset-attach',add)] },before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -635,9 +658,9 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       const id=uuid(), now=new Date().toISOString(), status=p.startsAt > now ? 'scheduled':'published';
       const result={contentType:'timed_content',contentId:id,status};
       await fencedBatch(execution, [
-        env.DB.prepare(`INSERT INTO timed_contents (id,type,placement,title,body,link_label,link_url,starts_at,ends_at,priority,status,dismissible,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,p.type,p.placement,p.title||null,p.body||null,p.linkLabel||null,p.linkUrl||null,p.startsAt,p.endsAt||null,p.priority,status,p.dismissible?1:0,1,now,now),
-        env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),'timed_content',id,'create',null,JSON.stringify({...p,id,status}),cmd.commandId,now),
-        successStatement(execution, result, now)
+        named('domain-insert', env.DB.prepare(`INSERT INTO timed_contents (id,type,placement,title,body,link_label,link_url,starts_at,ends_at,priority,status,dismissible,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,p.type,p.placement,p.title||null,p.body||null,p.linkLabel||null,p.linkUrl||null,p.startsAt,p.endsAt||null,p.priority,status,p.dismissible?1:0,1,now,now)),
+        named('revision', env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),'timed_content',id,'create',null,JSON.stringify({...p,id,status}),cmd.commandId,now)),
+        named(SUCCESS_STATEMENT_NAME, successStatement(execution, result, now))
       ]);
       return {success:true,commandId:cmd.commandId,result};
     }
