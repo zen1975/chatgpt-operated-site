@@ -12,7 +12,8 @@ import { fetchGeneratedArtifact, createGeneratedArtifactFetcher, type GeneratedA
 import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
-import { evaluateReplay } from './control-plane/replay';
+import { evaluateClaim } from './control-plane/replay';
+import { SITE_ID, SiteIdentityMismatch, assertCommandTargetsThisSite } from './site-identity';
 import { contractVersion } from './control-plane/contracts';
 import { RULE_VERSION } from './rule-version';
 
@@ -23,19 +24,41 @@ async function recordJob(commandId:string, command:string, status:string, error?
   await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,error_type,error_code,error_message,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,error_type=excluded.error_type,error_code=excluded.error_code,error_message=excluded.error_message,finished_at=excluded.finished_at`).bind(uuid(),commandId,command,status,1,e?.type||null,e?.code||null,message,new Date().toISOString(),new Date().toISOString()).run();
 }
 
-async function existingJob(commandId:string) { return await env.DB.prepare(`SELECT status,result_json,command_digest FROM jobs WHERE command_id=? LIMIT 1`).bind(commandId).first<{status:string;result_json:string|null;command_digest:string|null}>(); }
+async function storedJob(commandId:string) {
+  return await env.DB.prepare(`SELECT id,status,result_json,command_digest,command_type FROM jobs WHERE command_id=? LIMIT 1`).bind(commandId).first<{id:string;status:string;result_json:string|null;command_digest:string|null;command_type:string|null}>();
+}
 
 /**
- * Record which command this id is executing, before the mutation runs.
+ * Bind this commandId to this command, first writer wins.
  *
- * Success rows are written by each command's own transaction in several places;
- * none of them touch command_digest on conflict, so claiming it here means
- * every job created from this point carries the digest of the command that
- * produced it, without threading it through every mutation path.
+ * DO NOTHING rather than DO UPDATE: the identity binding of an existing id is
+ * never rewritten, so a second, different command cannot take over an id that
+ * another command already claimed. The row is then read back and the stored
+ * value -- not the submitted one -- decides what happens, which is what makes
+ * this safe under concurrent submission of two different commands with the
+ * same id.
  */
-async function claimCommandDigest(commandId:string, command:string, digest:string) {
+async function claimCommand(commandId:string, command:string, digest:string) {
+  const claimId = uuid();
   const now = new Date().toISOString();
-  await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,command_digest,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET command_digest=excluded.command_digest,command_type=excluded.command_type`).bind(uuid(),commandId,command,'running',1,digest,now).run();
+  await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,command_digest,created_at,started_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO NOTHING`)
+    .bind(claimId,commandId,command,'running',1,digest,now,now).run();
+  return { claimId, stored: await storedJob(commandId) };
+}
+
+/**
+ * Re-open a failed job for a retry of the *same* command. Conditioned on the
+ * stored digest and on the row still being failed, so it cannot rewrite an
+ * identity binding and cannot start a second concurrent execution.
+ */
+async function reopenFailedClaim(commandId:string, digest:string) {
+  const now = new Date().toISOString();
+  const outcome = await env.DB.prepare(`UPDATE jobs SET status='running',started_at=?,attempt_count=attempt_count+1 WHERE command_id=? AND command_digest=? AND status='failed'`)
+    .bind(now,commandId,digest).run();
+  const changes = (outcome as { meta?: { changes?: number } }).meta?.changes;
+  if (changes === 0) {
+    throw new CommandError('CONFLICT','COMMAND_IN_PROGRESS','This command was picked up by another run. Wait for it to finish rather than running it a second time.',true,{commandId});
+  }
 }
 
 type ContentRow = { id:string; content_type:'news'|'article'; slug:string; title:string; excerpt:string|null; blocks_json:string; status:string; published_at:string|null; starts_at:string|null; ends_at:string|null; seo_title:string|null; seo_description:string|null; version:number; };
@@ -268,15 +291,29 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
   // assertRuleVersion has always sat behind this line for the same reason; the
   // preflight binding now does too. Authorization stays in front: a caller
   // without the scope is refused whether or not the command already ran.
+  // This installation's identity, checked before idempotency resolution and
+  // before any mutation. A command addressed to another site is refused however
+  // it arrived, and a replay cannot slip past it.
+  try {
+    assertCommandTargetsThisSite(cmd.context.targetSite);
+  } catch (error) {
+    if (error instanceof SiteIdentityMismatch) {
+      throw new CommandError('CONFLICT','COMMAND_TARGET_SITE_MISMATCH',error.message,false,{ targetSite: cmd.context.targetSite ?? null, installation: SITE_ID });
+    }
+    throw error;
+  }
+
   // The digest of the complete immutable command, with the preflight receipt
   // excluded -- the same canonicalization the preflight receipt attests.
   const digest = await commandDigest(cmd);
-  const replay = evaluateReplay(cmd.commandId, digest, await existingJob(cmd.commandId));
-  if (replay.replay) return { success:true, commandId:cmd.commandId, idempotent:true, result: replay.result };
+  const { claimId, stored } = await claimCommand(cmd.commandId, cmd.command, digest);
+  const claim = evaluateClaim(cmd.commandId, cmd.command, digest, stored, claimId);
+
+  if (claim.kind === 'replay') return { success:true, commandId:cmd.commandId, idempotent:true, result: claim.result };
+  if (claim.kind === 'retry-after-failure') await reopenFailedClaim(cmd.commandId, digest);
 
   await verifyPreflightBinding(cmd);
   assertRuleVersion(cmd.context.ruleVersion);
-  await claimCommandDigest(cmd.commandId, cmd.command, digest);
 
   try {
     if (cmd.command === 'create_taxonomy_term') {

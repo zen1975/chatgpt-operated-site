@@ -7,6 +7,7 @@ import { repoRoot } from '../scripts/repo-root.mjs';
 import { loadRuleVersion } from '../scripts/load-command-contracts.mjs';
 import { canonicalCommandDigest as digestOf } from '../scripts/dispatch-command.mjs';
 import {
+  assertRemoteIdentity,
   validateCommand,
   preflightCommand,
   checkAssetIntakeReadiness,
@@ -33,7 +34,7 @@ const json = (status, body) => ({ ok: status >= 200 && status < 300, status, jso
  * from it, and a mutation counter so a test can prove how many times state
  * actually changed.
  */
-function installation({ readiness, preflight, jobs = new Map(), loseNextResponse = false } = {}) {
+function installation({ readiness, preflight, jobs = new Map(), loseNextResponse = false, siteId = SITE_ID, attestIdentity = true } = {}) {
   const calls = [];
   let mutations = 0;
   let lose = loseNextResponse;
@@ -46,9 +47,10 @@ function installation({ readiness, preflight, jobs = new Map(), loseNextResponse
     if (lookup) {
       const commandId = decodeURIComponent(lookup[1]);
       const job = jobs.get(commandId);
+      const attestation = attestIdentity ? { siteId } : {};
       return json(200, job
-        ? { success: true, commandId, known: true, status: job.status, commandDigest: job.commandDigest ?? null, finishedAt: job.finishedAt, result: job.status === 'success' ? job.result : null }
-        : { success: true, commandId, known: false, status: null });
+        ? { success: true, ...attestation, commandId, known: true, status: job.status, commandDigest: job.commandDigest ?? null, finishedAt: job.finishedAt, result: job.status === 'success' ? job.result : null }
+        : { success: true, ...attestation, commandId, known: false, status: null });
     }
 
     if (pathname === '/api/control/readiness/asset-intake/') {
@@ -95,7 +97,7 @@ function installation({ readiness, preflight, jobs = new Map(), loseNextResponse
   };
 }
 
-const PREFLIGHT_OK = json(200, { success: true, preflight: { commandDigest: DIGEST, contractVersion: 'v1', sideEffects: false, ok: true } });
+const PREFLIGHT_OK = json(200, { success: true, siteId: SITE_ID, preflight: { commandDigest: DIGEST, contractVersion: 'v1', sideEffects: false, ok: true } });
 const READY = { status: 'READY', code: 'ASSET_INTAKE_READY', provider: 'google_drive', checks: [] };
 
 const imageCommand = async (overrides = {}) => {
@@ -288,7 +290,7 @@ test('google_drive is checked against the Drive readiness endpoint', async () =>
 // ---------------------------------------------------------- gate 5: preflight
 
 test('preflight rejects a receipt that reports side effects', async () => {
-  const site = installation({ preflight: json(200, { success: true, preflight: { commandDigest: DIGEST, contractVersion: 'v1', sideEffects: true } }) });
+  const site = installation({ preflight: json(200, { success: true, siteId: SITE_ID, preflight: { commandDigest: DIGEST, contractVersion: 'v1', sideEffects: true } }) });
   await assertBlocked(
     site,
     async () => runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
@@ -473,7 +475,7 @@ test('a replay the Worker does not answer idempotently is stopped', async () => 
   const digest = await digestOf(command);
   const fetchImpl = async (url) => {
     const pathname = new URL(url).pathname;
-    if (pathname.startsWith('/api/control/commands/')) return json(200, { success: true, known: true, status: 'success', commandDigest: digest, result: { id: 'content_1' } });
+    if (pathname.startsWith('/api/control/commands/')) return json(200, { success: true, siteId: SITE_ID, known: true, status: 'success', commandDigest: digest, result: { id: 'content_1' } });
     if (pathname === DISPATCH_PATH) return json(200, { success: true, idempotent: false, result: { id: 'content_2' } });
     throw new Error(`unexpected ${pathname}`);
   };
@@ -629,4 +631,62 @@ test('blank workflow inputs read as unsupplied, so both can be passed through', 
   // Both genuinely supplied, and neither supplied.
   assert.throws(() => parseArgs(['--command-file', 'examples/commands/create-news.json', '--command', inline]), (e) => e.code === 'AMBIGUOUS_COMMAND');
   assert.throws(() => parseArgs(['--command-file', '', '--command', '']), (e) => e.code === 'NO_COMMAND');
+});
+
+// --------------------------------------------------- remote site identity
+
+// Authentication proves the caller holds the configured secret. It does not
+// prove the configuration points at the right installation: an environment
+// copied between customers authenticates perfectly against the wrong site.
+test('local A + command A + remote A is allowed', async () => {
+  const site = installation({ preflight: PREFLIGHT_OK, siteId: SITE_ID });
+  const result = await runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
+  assert.equal(result.dispatched, true);
+  assert.equal(site.mutations, 1);
+});
+
+test('local A + command A + remote B is rejected with zero mutations', async () => {
+  const site = installation({ preflight: PREFLIGHT_OK, siteId: 'a-different-customer-site' });
+  await assertBlocked(
+    site,
+    async () => runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
+    (e) => e.stage === 'remote-identity' && e.code === 'REMOTE_SITE_IDENTITY_MISMATCH'
+  );
+});
+
+test('a remote that attests no identity is rejected', async () => {
+  const site = installation({ preflight: PREFLIGHT_OK, attestIdentity: false });
+  await assertBlocked(
+    site,
+    async () => runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
+    (e) => e.stage === 'remote-identity' && e.code === 'REMOTE_SITE_IDENTITY_MISSING'
+  );
+});
+
+// The check runs on the first authenticated response, so a replay cannot slip
+// past it either.
+test('a replay against the wrong remote is rejected before dispatch', async () => {
+  const command = await example('create-news.json');
+  const site = installation({
+    siteId: 'a-different-customer-site',
+    jobs: new Map([[command.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: await digestOf(command) }]])
+  });
+  await assertBlocked(site, async () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'remote-identity');
+});
+
+test('the preflight response must attest the same identity', async () => {
+  const site = installation({ preflight: json(200, { success: true, siteId: 'a-different-customer-site', preflight: { commandDigest: DIGEST, contractVersion: 'v1', sideEffects: false } }) });
+  await assertBlocked(
+    site,
+    async () => runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
+    (e) => e.stage === 'remote-identity' && e.details?.source === 'preflight'
+  );
+});
+
+test('the attested identity must match the command target, not only local config', () => {
+  assert.throws(
+    () => assertRemoteIdentity({ attested: 'site-a', targetSite: 'site-b', localSiteId: 'site-a', source: 'command lookup' }),
+    (e) => e.code === 'REMOTE_SITE_IDENTITY_MISMATCH'
+  );
+  assert.doesNotThrow(() => assertRemoteIdentity({ attested: 'site-a', targetSite: 'site-a', localSiteId: 'site-a', source: 'command lookup' }));
 });

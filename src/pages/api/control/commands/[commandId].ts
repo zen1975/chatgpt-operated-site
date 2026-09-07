@@ -4,6 +4,7 @@ import { env } from 'cloudflare:workers';
 import { authorizeControlRead } from '@/server/control-plane/auth';
 import { controlError } from '@/server/control-plane/http';
 import { CommandId } from '@/server/command-schema';
+import { SITE_ID } from '@/server/site-identity';
 
 // Lets the dispatch gate tell "this command already ran" from "this command is
 // new" without guessing. A command whose dispatch response was lost can then be
@@ -28,10 +29,14 @@ export const GET: APIRoute = async ({ request, params }) => {
       .bind(commandId)
       .first<{ command_type: string; status: string; result_json: string | null; command_digest: string | null; created_at: string; finished_at: string | null }>();
 
-    if (!row) return Response.json({ success: true, commandId, known: false, status: null });
+    // Every authenticated control response attests which installation answered.
+    // Authentication proves the caller holds this installation's secret; it does
+    // not prove the caller meant to address this installation.
+    if (!row) return Response.json({ success: true, siteId: SITE_ID, commandId, known: false, status: null });
 
     return Response.json({
       success: true,
+      siteId: SITE_ID,
       commandId,
       known: true,
       command: row.command_type,

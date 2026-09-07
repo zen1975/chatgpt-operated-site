@@ -34,7 +34,7 @@ Declared under `vars` in `wrangler.jsonc`.
 | `SITE_TIMEZONE` | Timezone applied to scheduling and timed-content windows. |
 | `COMMAND_TRUSTED_ACTOR` | Actor name recorded for commands arriving on the trusted ingress. |
 | `COMMAND_TRUSTED_SCOPES` | Comma-separated mutation scopes granted to the trusted ingress. A command whose scope is absent is rejected before any payload validation or storage work. |
-| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. The dispatch gate needs `command:preflight` (preflight), `intake:read` (Asset Intake readiness) and `command:read` (idempotent replay lookup). |
+| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. The dispatch gate needs `command:preflight` (preflight), `intake:read` (Asset Intake readiness) and `command:read` (command claim lookup and remote identity attestation). |
 | `WORDPRESS_ASSET_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `import_wordpress_asset`. Not shipped in `wrangler.jsonc`: the command fails closed with `WORDPRESS_ASSET_ORIGIN_ALLOWLIST_REQUIRED` until an installation that wants WordPress import adds it. Add it to `vars` with the origins to import from, for example `https://legacy.example.com`. |
 
 Scope names are enumerated by `MUTATION_SCOPES` in `src/server/commands.ts`.
@@ -84,7 +84,7 @@ GitHub Actions dispatch gate, not by ChatGPT.
 | File | Purpose |
 | --- | --- |
 | `config/rule-version.json` | The command rule version. Single source of truth: the Worker rejects any command whose `context.ruleVersion` differs, and the shipped examples are checked against it. |
-| `config/site-profile.json` | Site identity, content types, dynamic slots, and Asset Intake declaration. |
+| `config/site-profile.json` | Site identity, content types, dynamic slots, and Asset Intake declaration. `site.id` is the canonical installation identity: the Worker compares every command's `context.targetSite` against it, and the dispatch gate requires the endpoint to attest the same value. There is deliberately no second copy. |
 | `config/page-capabilities.json` | Which page operations and section types are permitted per page. |
 | `config/content-limits.json` | Editorial length limits mirrored by the command schemas. |
 | `config/image-profile.json` | Image slot ratios and size guidance. Override per installation. |

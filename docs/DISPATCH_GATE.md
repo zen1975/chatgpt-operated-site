@@ -28,7 +28,7 @@ cannot cover on its own:
 3. **A record of what was requested, by whom.** The workflow run is the audit
    trail.
 
-## The four gates
+## The gates
 
 They run in a fixed order and every one fails closed. Nothing is dispatched
 unless all of them pass.
@@ -38,8 +38,9 @@ unless all of them pass.
 | 1 | Schema | none | Envelope or payload that does not match the current Zod contracts in `src/server` |
 | 2 | Rule version | none | `context.ruleVersion` differing from this installation's rule version |
 | 3 | Target site | none | A command written for a different installation |
-| 4 | Asset Intake readiness | authenticated read | A command carrying an intake source whose provider is not usable |
-| 5 | Preflight | authenticated read | Missing target, or `expectedVersion` no longer matching current state |
+| 4 | Remote identity | authenticated read | An endpoint that is not the installation the command names |
+| 5 | Asset Intake readiness | authenticated read | A command carrying an intake source whose provider is not usable |
+| 6 | Preflight | authenticated read | Missing target, or `expectedVersion` no longer matching current state |
 
 Gates 1 to 3 are purely local: they need no credentials and no network, so a
 misaddressed or malformed command never reaches the installation at all.
@@ -107,27 +108,95 @@ outright without a receipt (`COMMAND_PREFLIGHT_REQUIRED`).
 
 ## Recovering a lost dispatch response
 
-Commands are immutable and idempotent by `commandId`, but a dispatch can commit
-its mutation and still lose the response — a dropped connection, a cancelled
-run. Re-running the same command then meets a difficulty: the mutation already
-happened, so its `expectedVersion` is now legitimately stale, and preflight
-would report a conflict for a command that in fact succeeded.
+Commands are immutable and idempotent, but a dispatch can commit its mutation
+and still lose the response -- a dropped connection, a cancelled run. Re-running
+the command then meets two difficulties: the mutation already happened, so its
+`expectedVersion` is now legitimately stale, and if the contract has moved on
+since, its `ruleVersion` is stale too. Both would be reported as conflicts for a
+command that in fact succeeded.
 
-Before the state gates, the gate therefore asks the installation whether this
-exact `commandId` already completed, via `GET /api/control/commands/{commandId}`
-(scope `command:read`):
+### Identification is separate from admission
 
-- **Recorded as successful** → the state gates are skipped and the command is
-  re-sent. The Worker resolves idempotency by `commandId` before any contract
-  gate and returns the original result. No second mutation. If the Worker
-  answers non-idempotently, the gate stops (`REPLAY_NOT_IDEMPOTENT`) rather than
-  risk one.
-- **Recorded as failed, or not known** → ordinary work. Every gate runs.
-- **Lookup itself fails** → fail closed. Not knowing whether a command ran is
-  not the same as knowing it did not.
+The gate does two different jobs, in order.
 
-This is not a general preflight bypass: only a `commandId` the installation has
-already recorded as successful takes this path.
+**Step 1 -- identify.** Validate only what is needed to address the command
+safely: a JSON object with a valid `CommandId`, and a `targetSite` naming this
+installation. Compute the canonical digest, then ask
+`GET /api/control/commands/{commandId}` (scope `command:read`) whether this
+command already completed.
+
+**Step 2 -- admit, only if this is new work.** The full current schema, rule
+version, Asset Intake readiness and preflight. These rules describe how a *new*
+command is admitted; applying them to a completed one would strand it.
+
+### Idempotency is bound to the command, not the id
+
+An id identifies a request; the **digest identifies what was requested**. Keying
+idempotency on the id alone means that accidentally reusing a successful id for
+a different operation returns the old result and silently skips the mutation
+just requested, while reporting success.
+
+`migrations/0006_job_command_digest.sql` records the canonical digest with each
+job. The binding is made by whoever claims the id **first**, and is never
+rewritten:
+
+- the claim is an insert with **conflict-ignore** semantics; the row is then
+  read back and the **stored** value decides what happens
+- success and failure recording update status and result fields only. No write
+  path may touch `command_digest` or `command_type` -- a contract test enforces
+  that against the source
+
+| Stored row | Submitted command | Outcome |
+| --- | --- | --- |
+| none (this claim won) | -- | executes |
+| digest and type match, `success` | same immutable command | replayed; the original result is returned, no second mutation |
+| digest and type match, `running` | same immutable command | `COMMAND_IN_PROGRESS` -- retryable; never executed concurrently |
+| digest and type match, `failed` | same immutable command | retried, re-opening the row only while it is still failed, so two retries cannot both start |
+| digest or type differs | different command, payload, or target site | `COMMAND_ID_REUSED` -- fail closed |
+| no stored digest | any | `COMMAND_DIGEST_UNVERIFIABLE` -- fail closed |
+
+Under concurrent submission of two different commands sharing an id, exactly one
+digest wins: the loser cannot overwrite it, cannot be answered from the winner's
+result, and does not prevent the winner from being replayed.
+
+The digest uses one canonicalization everywhere, with the preflight receipt
+excluded -- receipts are binding metadata about a command, not part of it, so
+attaching one cannot change which job the command matches.
+
+**Enforced in both places.** The gate is not the boundary: the Worker applies
+the same state machine in `evaluateClaim`, so a command arriving by any other
+route is subject to it.
+
+### The endpoint must be the installation the command names
+
+`targetSite` matching local configuration is not enough. An environment copied
+between installations -- endpoint and secrets belonging to site B while this
+repository and the command name site A -- authenticates perfectly and would
+mutate the wrong customer.
+
+There is **one canonical identity**, `config/site-profile.json` -> `site.id`,
+read by the gate directly and by the Worker through
+`src/server/site-identity.ts`. No second, separately maintained copy.
+
+- **The Worker** compares `context.targetSite` with its own identity *before*
+  idempotency resolution and before any mutation, so the check holds for every
+  route in and a replay cannot bypass it (`COMMAND_TARGET_SITE_MISMATCH`).
+- **Authenticated control responses attest** the answering installation's
+  `siteId`.
+- **The gate** requires that attestation to agree with **both** the command's
+  target and local configuration, on the first authenticated response -- so
+  nothing reaches `/api/internal/commands` against the wrong site. A missing
+  attestation is `REMOTE_SITE_IDENTITY_MISSING`; a disagreement is
+  `REMOTE_SITE_IDENTITY_MISMATCH`. Both fail closed.
+
+### What this does not open
+
+A successful old-rule command replays; an **unknown** old-rule command is
+refused under the current rule version like any other new work. The exemption
+belongs to a specific completed command, matched by digest -- it is not a
+stale-rule bypass, and not a preflight bypass. A lookup that cannot be read
+fails closed: not knowing whether a command ran is not knowing it did not.
+
 
 ## Where a command may come from
 
