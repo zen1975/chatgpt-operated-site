@@ -4,7 +4,7 @@ import { COMMAND_PAYLOAD_SCHEMAS, CommandEnvelope, ImportWordPressAssetPayload, 
 import { slugify, uuid } from './util';
 import { CommandError } from './core/errors';
 import { resolvePermalink, resolveSeo, resolveTemplate, validateTaxonomyTerms } from './core/resolvers';
-import { ingestAsset, compensateUnassociatedAsset } from './core/assets';
+import { prepareAssetIntake, ingestAssetAsRootCommand, type AssetIntakePreparation } from './core/assets';
 import { fetchGoogleDriveAsset, refreshGoogleDriveAccessToken } from './adapters/assets/google-drive';
 import { getServiceAccountAccessToken } from './adapters/assets/google-service-account';
 import { ingestWordPressAsset } from './adapters/assets/wordpress';
@@ -145,7 +145,12 @@ async function commitContentMutation(execution:CommandExecution, row:ContentRow,
   return result;
 }
 
-async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference'], runtime:CommandRuntime, execution:CommandExecution, role:string) {
+/**
+ * Fetches and prepares a referenced asset. Returns the preparation -- result
+ * plus the D1 statements that register it -- so the *outer* command can put
+ * those statements into its own final fenced batch. It never completes the job.
+ */
+async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference'], runtime:CommandRuntime, execution:CommandExecution, role:string): Promise<AssetIntakePreparation> {
   if (!reference) throw new CommandError('USER_CORRECTABLE','ASSET_REFERENCE_REQUIRED','Asset reference is required.');
   if (reference.provider === 'google_drive') {
     const configured = env as typeof env & { GOOGLE_DRIVE_ACCESS_TOKEN?: string; GOOGLE_DRIVE_REFRESH_TOKEN?: string; GOOGLE_DRIVE_CLIENT_ID?: string; GOOGLE_DRIVE_CLIENT_SECRET?: string; GOOGLE_DRIVE_SA_CLIENT_EMAIL?: string; GOOGLE_DRIVE_SA_PRIVATE_KEY?: string };
@@ -157,7 +162,7 @@ async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference']
       || (configured.GOOGLE_DRIVE_SA_CLIENT_EMAIL && configured.GOOGLE_DRIVE_SA_PRIVATE_KEY ? await getServiceAccountAccessToken({ clientEmail: configured.GOOGLE_DRIVE_SA_CLIENT_EMAIL, privateKey: configured.GOOGLE_DRIVE_SA_PRIVATE_KEY }) : undefined);
     if (!token) throw new CommandError('USER_CONFIRMATION_REQUIRED','DRIVE_ACCESS_TOKEN_REQUIRED','Google Drive access is not provisioned for this runtime.');
     const fetched = await fetchGoogleDriveAsset({ provider:'google_drive', fileId:reference.providerAssetId, expectedSha256:reference.expectedChecksum }, { accessToken:token, fetchImpl:runtime.googleDriveFetchImpl });
-    return ingestAsset({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, execution);
+    return prepareAssetIntake({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, execution);
   }
   const generatedArtifactFetcher = runtime.generatedArtifactFetcher || (() => {
     const origin=(env as typeof env & { GENERATED_ARTIFACT_ORIGIN?: string }).GENERATED_ARTIFACT_ORIGIN;
@@ -166,7 +171,7 @@ async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference']
   })();
   if (!generatedArtifactFetcher) throw new CommandError('USER_CONFIRMATION_REQUIRED','GENERATED_ARTIFACT_FETCHER_REQUIRED','Generated artifact transfer is not provisioned for this runtime.');
   const fetched = await fetchGeneratedArtifact({ provider:'generated', artifactId:reference.providerAssetId, expectedSha256:reference.expectedChecksum }, { fetchArtifact:generatedArtifactFetcher });
-  return ingestAsset({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, execution);
+  return prepareAssetIntake({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, execution);
 }
 
 async function uniqueSlug(base:string, fallbackKey:string) {
@@ -594,24 +599,24 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
 
     if (cmd.command === 'replace_asset') {
       const p=ReplaceAssetPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
-      let ingestedAsset=false;
-      const assetId=p.assetId || (ingestedAsset=true, (await resolveReferenceAsset(p.reference, runtime, execution, p.role)).assetId);
+      // Intake prepares the asset and hands back its D1 registration; this
+      // command commits those statements in its own fenced batch and performs
+      // the single success transition.
+      let intakeStatements: unknown[] = [];
+      let assetId = p.assetId;
+      if (!assetId) {
+        const prepared = await resolveReferenceAsset(p.reference, runtime, execution, p.role);
+        assetId = prepared.result.assetId;
+        intakeStatements = prepared.statements;
+      }
       const asset=await env.DB.prepare('SELECT id FROM assets WHERE id=? LIMIT 1').bind(assetId).first<{id:string}>();
       if (!asset) throw new CommandError('USER_CORRECTABLE','ASSET_NOT_FOUND','The requested asset was not found.');
       const when=new Date().toISOString();
       const remove=env.DB.prepare(`DELETE FROM content_assets WHERE content_type=? AND content_id=? AND role=? AND position=? AND EXISTS (SELECT 1 FROM news WHERE id=? AND content_type=? AND version=?)`).bind(p.contentType,p.contentId,p.role,p.position,p.contentId,p.contentType,p.expectedVersion+1);
       const add=env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,assetId,p.role,p.position,when,p.contentId,p.contentType,p.expectedVersion+1);
-      try {
-        const associations=(before.assetAssociations as Array<Record<string,unknown>>).filter((association) => !(association.role === p.role && association.position === p.position));
-        const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[remove,add],before);
-        return {success:true,commandId:cmd.commandId,result};
-      } catch (error) {
-        if (ingestedAsset) {
-          try { await compensateUnassociatedAsset(assetId); }
-          catch (compensationError) { throw new CommandError('FATAL_SYSTEM_ERROR','ASSET_COMPENSATION_FAILED','Asset replacement failed and compensation did not complete.',false,{cause:compensationError instanceof Error ? compensationError.message : 'unknown'}); }
-        }
-        throw error;
-      }
+      const associations=(before.assetAssociations as Array<Record<string,unknown>>).filter((association) => !(association.role === p.role && association.position === p.position));
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[...intakeStatements,remove,add],before);
+      return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'create_timed_content') {
@@ -654,7 +659,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         {
           allowedOrigins,
           ingest: (descriptor, bytes, asExecution) =>
-            ingestAsset(descriptor, bytes, asExecution)
+            ingestAssetAsRootCommand(descriptor, bytes, asExecution)
         },
         execution
       );

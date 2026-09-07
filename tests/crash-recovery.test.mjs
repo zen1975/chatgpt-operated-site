@@ -150,13 +150,10 @@ test('asset intake is content-addressed, so a repeated attempt is idempotent', a
   assert.match(source, /const r2Key = assetR2Key\(computed, asset\.variant, asset\.mimeType\)/);
   assert.match(source, /const id = assetId\(computed, asset\.variant\)/);
 
-  // The D1 row is inserted only when no row for that content already exists,
-  // and the domain rows plus the job completion go in one batch.
+  // The D1 registration is emitted only when no row for that content exists,
+  // and is handed to the outer command rather than committed here.
   assert.match(source, /const existing = await env\.DB\.prepare\('SELECT id[\s\S]{0,200}WHERE sha256=\? AND variant=\?/);
-  assert.match(source, /const statements = existing \? \[\] :/);
-  // The batch is fenced by the lease, and completes under this attempt's own
-  // execution context rather than one looked up by commandId.
-  assert.match(source, /await fencedBatch\(execution, \[[\s\S]{0,600}successStatement\(execution, result, now\)/);
+  assert.match(source, /const registration = existing \? \[\] :/);
 
   const { assetR2Key, assetId } = await loadServerModule('src/server/core/assets.ts');
   const hash = 'b'.repeat(64);

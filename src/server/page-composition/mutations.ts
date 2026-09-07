@@ -6,7 +6,7 @@ import { extractModuleAssetReferences, getModuleAssetSlot, validatePageModule } 
 import { assertSectionAllowed, resolvePageCapability, type PageCapability } from './capabilities';
 import { PageRecord, PageSectionRecord, type ModuleType } from './schemas';
 import { assertReusablePatternTree } from '../../lib/reusable-patterns';
-import { compensateUnassociatedAsset, isAssetAvailable } from '../core/assets';
+import { isAssetAvailable } from '../core/assets';
 import {
   CreatePagePayload, InsertPageSectionPayload, RemovePageSectionPayload, ReorderPageSectionsPayload,
   ReplacePageSectionAssetPayload, RollbackPagePayload, UpdatePagePayload, UpdatePageSectionPayload
@@ -56,7 +56,10 @@ async function getPage(pageId: string) {
 
 type PageSection = ReturnType<typeof parseSection>;
 
-type PageAssetResolver = (reference: unknown, role: string) => Promise<{ assetId: string; reused?: boolean }>;
+// Returns a preparation, not a finished asset: the statements travel with it so
+// the page command can commit them in its own fenced batch and remain the only
+// writer that finalizes the job.
+type PageAssetResolver = (reference: unknown, role: string) => Promise<{ result: { assetId: string; reused: boolean }; statements: unknown[] }>;
 
 async function getSections(pageId: string): Promise<PageSection[]> {
   const rows = await env.DB.prepare('SELECT id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at FROM page_sections WHERE page_id=? ORDER BY position,id').bind(pageId).all<SectionRow>();
@@ -460,31 +463,25 @@ export async function executePageCommand(execution: CommandExecution, input: unk
     requirePermission(policy, 'replaceAsset'); checkPageVersion(page, payload.expectedVersion); checkSectionVersion(section, payload.expectedSectionVersion); assertModulePolicy(policy, section.sectionType, section.id);
     const slot = getModuleAssetSlot(section.sectionType, payload.assetPath);
     if (!slot) throw pageError('PAGE_ASSET_PATH_INVALID', `Asset path is not registered for ${section.sectionType}: ${payload.assetPath}`);
-    let createdAsset = false;
     let assetId = payload.assetId;
     const assetReference = payload.reference;
+    let intakeStatements: unknown[] = [];
     if (assetReference) {
       if (slot.role !== assetReference.intendedRole) throw pageError('PAGE_ASSET_ROLE_MISMATCH', 'Asset reference role does not match the registered Page module slot.');
       if (!options.resolveAssetReference) throw pageError('PAGE_ASSET_INTAKE_UNAVAILABLE', 'Asset provider intake is not available for this runtime.');
       const resolved = await options.resolveAssetReference(assetReference, slot.role);
-      assetId = resolved.assetId;
-      createdAsset = !resolved.reused;
+      assetId = resolved.result.assetId;
+      // The intake's D1 registration travels into this command's own fenced
+      // batch; intake never writes on its own.
+      intakeStatements = resolved.statements;
     }
     if (!assetId) throw pageError('PAGE_ASSET_REQUIRED', 'A canonical Asset ID or provider reference is required.');
     const asset = await env.DB.prepare("SELECT id FROM assets WHERE id=? AND validation_status='validated' AND r2_key IS NOT NULL AND bytes > 0 LIMIT 1").bind(assetId).first<{ id: string }>();
     if (!asset) throw pageError('PAGE_ASSET_UNUSABLE', 'The requested Asset is missing or unavailable.');
     const props = cloneWithAssetPath(section.props, payload.assetPath, assetId); validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props }, section.id); await assertSectionAssets(section.sectionType, props);
     const now = new Date().toISOString(), nextVersion = page.version + 1, nextSectionVersion = section.version + 1, updated = { ...section, props, version: nextSectionVersion, updatedAt: now }, sections = current.map((item) => item.id === section.id ? updated : item), before = snapshot(page, current), after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: section.id, assetId, version: nextVersion, sectionVersion: nextSectionVersion, action: 'replace_page_section_asset' };
-    const statements = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)];
-    try {
-      return await commitPageMutation(execution, page, payload.expectedVersion, 'replace_page_section_asset', before, after, statements, result);
-    } catch (error) {
-      if (createdAsset) {
-        try { await compensateUnassociatedAsset(assetId); }
-        catch (compensationError) { throw new CommandError('FATAL_SYSTEM_ERROR', 'ASSET_COMPENSATION_FAILED', 'Page asset replacement failed and Asset compensation did not complete.', false, { cause: compensationError instanceof Error ? compensationError.message : 'unknown' }); }
-      }
-      throw error;
-    }
+    const statements = [...intakeStatements, pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)];
+    return await commitPageMutation(execution, page, payload.expectedVersion, 'replace_page_section_asset', before, after, statements, result);
   }
 
   if (command === 'rollback_page') {

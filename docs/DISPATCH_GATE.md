@@ -241,6 +241,39 @@ exactly the one job row that lease owns.
 R2 objects are content-addressed, so a repeated write is harmless -- but their
 D1 registration is fenced like everything else.
 
+### Only the outermost execution finalizes a job
+
+Asset intake is split in two. **Preparation** fetches the bytes, validates them,
+derives the canonical asset id and key, and performs the content-addressed R2
+put; it returns the D1 statements that register the asset and completes nothing.
+The **outer command** puts those statements into its own final fenced batch,
+alongside the attachment or replacement, the revision, and the single success
+transition.
+
+That split is not tidiness. When intake finalized the shared job itself, a
+provider-backed `replace_asset` marked its own command successful and cleared
+its lease before the replacement had run: the parent's batch then failed its own
+fence, and the command was reported as completed although nothing was replaced.
+`import_wordpress_asset` is the one case where intake *is* the outer command, so
+it has an explicit root-command entry point that performs the one finalization.
+
+A contract test fails the build if any file outside root command orchestration
+completes a job, and if preparation ever commits a batch or writes a success.
+
+### Orphaned objects are preferred to unsafe deletion
+
+There is no compensating R2 delete in the command path. A content-addressed key
+is shared state, not something one attempt owns: a stale attempt deleting it can
+remove the object a concurrent retry has just written and is about to reference,
+leaving a committed record pointing at nothing.
+
+Because registration now travels in the outer command's fenced batch, a failed
+command commits no asset row at all. The worst outcome is an unreferenced
+content-addressed object -- inert, and reclaimable by a separate
+garbage-collection pass that can apply a grace window and prove no D1 reference
+and no live execution uses the key. Neither can be proven from inside a failing
+command, which is why it is not attempted there.
+
 The lease outlasts any single attempt by design: `LEASE_DURATION_MS` is fifteen
 minutes against a supported attempt bound of five, and a Worker invocation is
 bounded far below either. Reclaiming too early risks concurrent execution;

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ingestAsset } from '../../core/assets';
+import { ingestAssetAsRootCommand } from '../../core/assets';
 import type { CommandExecution } from '../../control-plane/job-store';
 import { CommandError } from '../../core/errors';
 import {
@@ -245,7 +245,7 @@ export async function ingestWordPressAsset(
   options: {
     allowedOrigins: string[];
     fetchImpl?: FetchLike;
-    ingest?: typeof ingestAsset;
+    ingest?: typeof ingestAssetAsRootCommand;
   },
   execution: CommandExecution
 ) {
@@ -255,7 +255,7 @@ export async function ingestWordPressAsset(
       options
     );
 
-  return (options.ingest ?? ingestAsset)(
+  return (options.ingest ?? ingestAssetAsRootCommand)(
     fetched.descriptor,
     fetched.bytes,
     execution

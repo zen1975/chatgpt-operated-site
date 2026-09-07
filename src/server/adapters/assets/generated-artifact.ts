@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ingestAsset } from '../../core/assets';
+import { prepareAssetIntake } from '../../core/assets';
 import type { CommandExecution } from '../../control-plane/job-store';
 import { CommandError } from '../../core/errors';
 import { validateFetchedAsset, type AssetFetchResult, type AssetMimeType } from './intake-common';
@@ -48,7 +48,7 @@ export async function fetchGeneratedArtifact(referenceInput: unknown, options: {
   return validated;
 }
 
-export async function ingestGeneratedArtifact(referenceInput: unknown, options: { fetchArtifact: GeneratedArtifactFetcher; ingest?: typeof ingestAsset }, execution: CommandExecution) {
+export async function ingestGeneratedArtifact(referenceInput: unknown, options: { fetchArtifact: GeneratedArtifactFetcher; ingest?: typeof prepareAssetIntake }, execution: CommandExecution) {
   const validated = await fetchGeneratedArtifact(referenceInput, options);
-  return (options.ingest ?? ingestAsset)(validated.descriptor, validated.bytes, execution);
+  return (options.ingest ?? prepareAssetIntake)(validated.descriptor, validated.bytes, execution);
 }
