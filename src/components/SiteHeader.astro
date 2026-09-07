@@ -1,13 +1,16 @@
 ---
 const links = [
   { href: '/', label: 'Home' },
+  { href: '/about/', label: 'About' },
+  { href: '/services/', label: 'Services' },
   { href: '/news/', label: 'News' },
-  { href: '/column/', label: 'Articles' }
+  { href: '/column/', label: 'Insights' },
+  { href: '/contact/', label: 'Contact' }
 ];
 ---
 <header class="site-header">
   <div class="shell site-header__inner">
-    <a class="site-brand" href="/">ChatGPT Website Starter</a>
+    <a class="site-brand" href="/">Example Company</a>
     <nav aria-label="Main navigation">
       {links.map((link) => <a href={link.href}>{link.label}</a>)}
     </nav>
