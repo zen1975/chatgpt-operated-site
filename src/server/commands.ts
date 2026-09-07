@@ -13,7 +13,7 @@ import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
 import { evaluateClaim, evaluateExistingJob } from './control-plane/replay';
-import { claimCommand, readJob, reopenFailedJob, recordFailure, successStatement, guardedSuccessStatement } from './control-plane/job-store';
+import { claimCommand, readJob, reopenFailedJob, reclaimExpiredLease, recordFailure, setLeaseToken, clearLeaseToken, successStatement, guardedSuccessStatement } from './control-plane/job-store';
 import { SITE_ID, SiteIdentityMismatch, assertCommandTargetsThisSite } from './site-identity';
 import { contractVersion } from './control-plane/contracts';
 import { RULE_VERSION } from './rule-version';
@@ -281,18 +281,27 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
   if (!payloadSchema) throw new CommandError('FATAL_SYSTEM_ERROR','COMMAND_NOT_IMPLEMENTED',`Command not implemented: ${cmd.command}`);
   payloadSchema.parse(cmd.payload);
 
-  // Transition to running, atomically.
+  // Transition to running, atomically. Each branch returns the lease this
+  // attempt holds; completion is refused unless it still holds it.
+  let leaseToken: string;
   if (existing.kind === 'proceed-after-failure') {
-    await reopenFailedJob(cmd.commandId, digest);
+    leaseToken = await reopenFailedJob(cmd.commandId, cmd.command, digest);
+  } else if (existing.kind === 'reclaim-expired-lease') {
+    // The previous attempt died without recording a terminal status. Only the
+    // same command can take it over, and only while the lease is still expired.
+    leaseToken = await reclaimExpiredLease(cmd.commandId, cmd.command, digest);
   } else {
-    const { claimId, stored } = await claimCommand(cmd.commandId, cmd.command, digest);
+    const claim = await claimCommand(cmd.commandId, cmd.command, digest);
     // Another submission may have claimed the id between the read above and
     // this insert. The stored row decides, so a loser is refused rather than
     // executing alongside the winner.
-    const claim = evaluateClaim(cmd.commandId, cmd.command, digest, stored, claimId);
-    if (claim.kind === 'replay') return { success:true, commandId:cmd.commandId, idempotent:true, result: claim.result };
-    if (claim.kind === 'retry-after-failure') await reopenFailedJob(cmd.commandId, digest);
+    const outcome = evaluateClaim(cmd.commandId, cmd.command, digest, claim.stored, claim.claimId);
+    if (outcome.kind === 'replay') return { success:true, commandId:cmd.commandId, idempotent:true, result: outcome.result };
+    leaseToken = outcome.kind === 'retry-after-failure'
+      ? await reopenFailedJob(cmd.commandId, cmd.command, digest)
+      : claim.leaseToken;
   }
+  setLeaseToken(cmd.commandId, leaseToken);
 
   // From here the job is `running`, so every exit must be terminal.
   try {
@@ -656,8 +665,12 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
 
     throw new CommandError('FATAL_SYSTEM_ERROR','COMMAND_NOT_IMPLEMENTED',`Command not implemented: ${cmd.command}`);
   } catch (e) {
-    // The job is running; it must not stay that way.
+    // The job is running; it must not stay that way. The write carries this
+    // attempt's lease, so a superseded attempt cannot overwrite the result of
+    // the one that replaced it.
     await recordFailure(cmd.commandId, cmd.command, e);
     throw e;
+  } finally {
+    clearLeaseToken(cmd.commandId);
   }
 }

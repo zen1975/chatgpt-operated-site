@@ -194,8 +194,48 @@ envelope -> authorization -> site identity -> digest
 An admission check that refuses a command must not leave a `running` row: that
 row would make every later retry of that immutable command fail as
 `COMMAND_IN_PROGRESS` forever. Once `running` is established, every exit is
-terminal — success or failed — so the only `running` row is an execution
+terminal -- success or failed -- so the only `running` row is an execution
 actually in flight.
+
+### Leases, for attempts that never finish
+
+An exception can be recorded. A terminated isolate cannot. Without a lease, a
+crash mid-attempt would strand the command exactly as an unrecorded failure
+would, so each running attempt holds one
+(`migrations/0007_job_lease.sql`).
+
+| Lease state | Outcome |
+| --- | --- |
+| unexpired | `COMMAND_IN_PROGRESS` -- a real execution is under way |
+| expired, same id + type + digest | reclaimed by one atomic conditional update |
+| expired, different type or digest | `COMMAND_ID_REUSED` -- however old the lease |
+| no lease recorded | treated as live; never reclaimed blindly |
+
+Completion requires the **current** lease token, so an attempt that was
+superseded cannot write its result over the one that replaced it. Two racing
+reclaimers contend on the same statement, so only one wins.
+
+The lease outlasts any single attempt by design: `LEASE_DURATION_MS` is fifteen
+minutes against a supported attempt bound of five, and a Worker invocation is
+bounded far below either. Reclaiming too early risks concurrent execution;
+reclaiming too late only delays recovery of an attempt that is already dead.
+
+### A reclaimed attempt must not repeat a side effect
+
+Recovery is only safe if re-running is safe. Two mechanisms carry that:
+
+- **D1 work** keeps the domain mutation and the job completion in one batch, so
+  an interrupted attempt leaves neither behind, and the mutations are guarded on
+  their natural keys so a re-run after a committed mutation applies nothing a
+  second time.
+- **R2 and provider work** is content-addressed: the asset id and the R2 key are
+  derived from the SHA-256 of the bytes, and the D1 row is inserted only when no
+  row for that content exists. A repeated attempt writes the same bytes to the
+  same key.
+
+Termination before the mutation, during it, and after it but before the
+completion write are each tested against a real migrated database. In every case
+a retry produces one logical mutation and one stable result.
 
 | Stored row | Submitted command | Outcome |
 | --- | --- | --- |

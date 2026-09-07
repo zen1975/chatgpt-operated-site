@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { executeCommand } from '@/server/commands';
 import { RULE_VERSION } from '@/server/rule-version';
+import { SITE_ID } from '@/server/site-identity';
 
 const EmergencyNewsInput = z.object({
   requestId: z.string().min(8).max(120).regex(/^[A-Za-z0-9._-]+$/),
@@ -97,8 +98,12 @@ export const POST: APIRoute = async ({ request }) => {
       command: 'create_news' as const,
       issuedAt: timestamp,
       context: {
+        // targetSite names the site being operated on, not the route the
+        // request arrived through. It comes from the one canonical installation
+        // identity the Worker checks against; describing the ingress here made
+        // every emergency publication fail that check.
         ruleVersion: RULE_VERSION,
-        targetSite: 'emergency-sheet'
+        targetSite: SITE_ID
       },
       payload: {
         title: input.title,
@@ -112,6 +117,9 @@ export const POST: APIRoute = async ({ request }) => {
       }
     };
 
+    // The ingress is recorded as the actor -- the existing field for "who asked"
+    // -- so the emergency origin is still auditable without overloading the
+    // field that says which site is being changed.
     const result = await executeCommand(command, {
       trustedAuthorization: {
         actor: 'emergency-sheet',
