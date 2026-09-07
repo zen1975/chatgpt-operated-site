@@ -61,7 +61,9 @@
           "type": "string"
         },
         "targetSite": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         },
         "requiresAssetIntake": {
           "type": "boolean"
@@ -87,7 +89,8 @@
         }
       },
       "required": [
-        "ruleVersion"
+        "ruleVersion",
+        "targetSite"
       ],
       "additionalProperties": false
     },

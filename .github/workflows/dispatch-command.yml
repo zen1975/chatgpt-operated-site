@@ -24,6 +24,7 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: site-operations
     steps:
       - uses: actions/checkout@v4

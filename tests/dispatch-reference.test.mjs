@@ -55,6 +55,7 @@ test('invalid payload, stale rules, and the wrong site fail before network acces
   const cases = [
     { ...base, payload: {} },
     { ...base, context: { ...base.context, ruleVersion: 'stale' } },
+    { ...base, context: { ruleVersion: base.context.ruleVersion } },
     { ...base, context: { ...base.context, targetSite: 'other-site' } }
   ];
   for (const command of cases) {
