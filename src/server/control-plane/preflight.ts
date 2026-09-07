@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { CommandEnvelope, COMMAND_PAYLOAD_SCHEMAS } from '../command-schema';
 import { CommandError } from '../core/errors';
 import { preflightPageCommand } from '../page-composition/mutations';
+import { assertCommandTargetsThisSite } from '../site-identity';
 import { commandDigest } from './digest';
 import { contractVersion } from './contracts';
 
@@ -16,6 +17,7 @@ function stale(code: string, expectedVersion: number, currentVersion: number) {
 /** Validate a complete command envelope without invoking any mutation service. */
 export async function preflightCommand(input: unknown) {
   const envelope = CommandEnvelope.parse(input);
+  assertCommandTargetsThisSite(envelope.context.targetSite);
   const digest = await commandDigest(envelope);
   const success = (result: Record<string, unknown>) => ({ ...result, commandDigest: digest, contractVersion: contractVersion(), validatedAt: new Date().toISOString(), sideEffects: false });
   const schema = COMMAND_PAYLOAD_SCHEMAS[envelope.command as keyof typeof COMMAND_PAYLOAD_SCHEMAS];
