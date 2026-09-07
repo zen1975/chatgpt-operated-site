@@ -154,7 +154,9 @@ test('asset intake is content-addressed, so a repeated attempt is idempotent', a
   // and the domain rows plus the job completion go in one batch.
   assert.match(source, /const existing = await env\.DB\.prepare\('SELECT id[\s\S]{0,200}WHERE sha256=\? AND variant=\?/);
   assert.match(source, /const statements = existing \? \[\] :/);
-  assert.match(source, /await env\.DB\.batch\(\[[\s\S]{0,600}successStatement\(commandId, commandType, result, now\)/);
+  // The batch is fenced by the lease, and completes under this attempt's own
+  // execution context rather than one looked up by commandId.
+  assert.match(source, /await fencedBatch\(execution, \[[\s\S]{0,600}successStatement\(execution, result, now\)/);
 
   const { assetR2Key, assetId } = await loadServerModule('src/server/core/assets.ts');
   const hash = 'b'.repeat(64);

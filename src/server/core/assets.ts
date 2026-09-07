@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { CommandError } from './errors';
 import { uuid } from '../util';
-import { successStatement } from '../control-plane/job-store';
+import { successStatement, fencedBatch, assertOwnedRowAffected, type CommandExecution } from '../control-plane/job-store';
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 
@@ -151,7 +151,8 @@ function associationStatements(asset: AssetIntake, id: string, now: string) {
  * object is compensating-deleted unless an existing logical asset already
  * owns the deterministic key. No logical asset is exposed without metadata.
  */
-export async function ingestAsset(input: unknown, bytes: AssetBinary, commandId: string, commandType = 'create_asset') {
+export async function ingestAsset(input: unknown, bytes: AssetBinary, execution: CommandExecution) {
+  const commandId = execution.commandId;
   const asset = AssetIntakeDescriptor.parse(input);
   if (bytes.byteLength !== asset.bytes) throw new CommandError('USER_CORRECTABLE', 'ASSET_BYTE_COUNT_MISMATCH', 'Asset byte count does not match payload.');
   const computed = await sha256(bytes);
@@ -177,12 +178,14 @@ export async function ingestAsset(input: unknown, bytes: AssetBinary, commandId:
     const statements = existing ? [] : [env.DB.prepare(
       `INSERT INTO assets (id,r2_key,original_filename,mime_type,width,height,bytes,alt,caption,description,original_asset_id,variant,created_at,source_provider,source_id,source_sha256,source_metadata_json,sha256,logical_asset_id,intake_key,validation_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(id, r2Key, asset.originalFilename, asset.mimeType, asset.width ?? null, asset.height ?? null, asset.bytes, asset.alt, asset.caption ?? null, asset.description ?? null, asset.variant === 'original' ? null : assetId(computed, 'original'), asset.variant, now, asset.sourceProvider, asset.sourceId, computed, JSON.stringify({ ...asset.sourceMetadata, sourceProvider: asset.sourceProvider, sourceId: asset.sourceId, expectedSha256: asset.expectedSha256 ?? null }), computed, logicalAssetId, intakeKey, 'validated')];
-    await env.DB.batch([
+    const batch = await fencedBatch(execution, [
       ...statements,
       ...associationStatements(asset, delivery.assetId, now),
       env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(), 'asset', delivery.assetId, existing ? 'reuse' : 'create', null, after, commandId, now),
-      successStatement(commandId, commandType, result, now)
+      successStatement(execution, result, now)
     ]);
+    // The final transition must have affected exactly the row this lease owns.
+    assertOwnedRowAffected(execution, batch[batch.length - 1]);
     return result;
   } catch (error) {
     const row = await env.DB.prepare('SELECT id FROM assets WHERE sha256=? AND variant=? LIMIT 1').bind(computed, asset.variant).first<{id:string}>();

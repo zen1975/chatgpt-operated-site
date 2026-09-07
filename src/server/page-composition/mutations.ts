@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { successStatement } from '../control-plane/job-store';
+import { successStatement, fencedBatch, assertOwnedRowAffected, type CommandExecution } from '../control-plane/job-store';
 import { CommandError } from '../core/errors';
 import { uuid } from '../util';
 import { extractModuleAssetReferences, getModuleAssetSlot, validatePageModule } from './registry';
@@ -170,8 +170,8 @@ function revisionStatement(commandId: string, pageId: string, action: string, be
   return env.DB.prepare('INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(uuid(), 'page', pageId, action, JSON.stringify(before), JSON.stringify(after), commandId, now);
 }
 
-function jobStatement(commandId: string, command: string, result: unknown, now: string) {
-  return successStatement(commandId, command, result, now);
+function jobStatement(execution: CommandExecution, result: unknown, now: string) {
+  return successStatement(execution, result, now);
 }
 
 function positionStatements(pageId: string, sections: Array<{ id: string; position: number }>) {
@@ -181,15 +181,17 @@ function positionStatements(pageId: string, sections: Array<{ id: string; positi
   ];
 }
 
-async function commitPageMutation(commandId: string, command: string, page: PageRow, expectedVersion: number, action: string, before: unknown, after: unknown, statements: unknown[], result: unknown) {
+async function commitPageMutation(execution: CommandExecution, page: PageRow, expectedVersion: number, action: string, before: unknown, after: unknown, statements: unknown[], result: unknown) {
   const now = new Date().toISOString();
-  const batch = await env.DB.batch([
+  const batch = await fencedBatch(execution, [
     ...statements,
-    revisionStatement(commandId, page.id, action, before, after, now),
-    jobStatement(commandId, command, result, now)
+    revisionStatement(execution.commandId, page.id, action, before, after, now),
+    jobStatement(execution, result, now)
   ] as never[]);
-  const changes = (batch[0] as { meta?: { changes?: number } })?.meta?.changes;
+  // batch[0] is the lease fence; the guarded page UPDATE is next.
+  const changes = (batch[1] as { meta?: { changes?: number } })?.meta?.changes;
   if (changes !== 1) throw new CommandError('CONFLICT', 'PAGE_VERSION_CONFLICT', 'Page changed during the command.', false, { expectedVersion, currentVersion: page.version });
+  assertOwnedRowAffected(execution, batch[batch.length - 1]);
   return result;
 }
 
@@ -228,7 +230,9 @@ function sectionItems(section: PageSection): Array<Record<string, unknown>> {
 
 function itemById(items: Array<Record<string, unknown>>, itemId: string) { const item = items.find((candidate) => candidate.id === itemId); if (!item) throw pageError('PAGE_ITEM_NOT_FOUND', 'The requested section item was not found.'); return item; }
 
-async function executePageSectionItemCommand(command: string, input: unknown, commandId: string) {
+async function executePageSectionItemCommand(execution: CommandExecution, input: unknown) {
+  const command = execution.commandType;
+  const commandId = execution.commandId;
   const payload: any = command === 'insert_page_section_item' ? InsertPageSectionItemPayload.parse(input) : command === 'update_page_section_item' ? UpdatePageSectionItemPayload.parse(input) : command === 'remove_page_section_item' ? RemovePageSectionItemPayload.parse(input) : command === 'reorder_page_section_items' ? ReorderPageSectionItemsPayload.parse(input) : ReplacePageSectionItemAssetPayload.parse(input);
   const page = await getPage(payload.pageId), current = await getSections(page.id), section = sectionById(current, payload.sectionId), policy = policyFor(page);
   requirePermission(policy, 'update'); checkPageVersion(page, payload.expectedVersion); checkSectionVersion(section, payload.expectedSectionVersion); assertModulePolicy(policy, section.sectionType, section.id);
@@ -250,7 +254,7 @@ async function executePageSectionItemCommand(command: string, input: unknown, co
   }
   const props = section.sectionType === 'table' ? { ...(section.props as Record<string, unknown>), rows: nextItems } : { ...(section.props as Record<string, unknown>), items: nextItems }; validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props }, section.id); await assertSectionAssets(section.sectionType, props);
   const now = new Date().toISOString(), nextVersion = page.version + 1, nextSectionVersion = section.version + 1, updated = { ...section, props, version: nextSectionVersion, updatedAt: now }, sections = current.map((candidate) => candidate.id === section.id ? updated : candidate), before = snapshot(page, current), after = snapshot({ ...page, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: section.id, version: nextVersion, sectionVersion: nextSectionVersion, action: command };
-  return commitPageMutation(commandId, command, page, payload.expectedVersion, command, before, after, [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)], result);
+  return commitPageMutation(execution, page, payload.expectedVersion, command, before, after, [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)], result);
 }
 
 /**
@@ -364,8 +368,10 @@ export async function preflightPageCommand(command: string, input: unknown) {
   throw pageError('PREFLIGHT_COMMAND_UNSUPPORTED', `Preflight is not implemented for command: ${command}`);
 }
 
-export async function executePageCommand(command: string, input: unknown, commandId: string, options: { resolveAssetReference?: PageAssetResolver } = {}) {
-  if (command === 'insert_page_section_item' || command === 'update_page_section_item' || command === 'remove_page_section_item' || command === 'reorder_page_section_items' || command === 'replace_page_section_item_asset') return executePageSectionItemCommand(command, input, commandId);
+export async function executePageCommand(execution: CommandExecution, input: unknown, options: { resolveAssetReference?: PageAssetResolver } = {}) {
+  const command = execution.commandType;
+  const commandId = execution.commandId;
+  if (command === 'insert_page_section_item' || command === 'update_page_section_item' || command === 'remove_page_section_item' || command === 'reorder_page_section_items' || command === 'replace_page_section_item_asset') return executePageSectionItemCommand(execution, input);
   if (command === 'create_page') {
     const payload = CreatePagePayload.parse(input);
     if (!PAGE_TEMPLATES.has(payload.templateProfile)) throw pageError('INVALID_PAGE_TEMPLATE_PROFILE', `Page template profile is not registered: ${payload.templateProfile}`);
@@ -385,8 +391,9 @@ export async function executePageCommand(command: string, input: unknown, comman
     const result = { pageId, slug: page.slug, version: 1, action: 'create_page' };
     const statements: unknown[] = [env.DB.prepare('INSERT INTO pages (id,slug,title,page_type,template_profile,status,seo_title,seo_description,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(page.id, page.slug, page.title, page.pageType, page.templateProfile, page.status, page.seoTitle, page.seoDescription, page.version, now, now)];
     for (const section of sections) statements.push(env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(section.id, section.pageId, section.sectionType, section.position, section.variant, JSON.stringify(section.props), section.status, section.version, now, now));
-    statements.push(revisionStatement(commandId, page.id, 'create_page', null, after, now), jobStatement(commandId, command, result, now));
-    await env.DB.batch(statements as never[]);
+    statements.push(revisionStatement(commandId, page.id, 'create_page', null, after, now), jobStatement(execution, result, now));
+    const batch = await fencedBatch(execution, statements);
+    assertOwnedRowAffected(execution, batch[batch.length - 1]);
     return result;
   }
 
@@ -402,7 +409,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const afterPage = { ...mapPage(page), ...Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, value])), version: nextVersion, updatedAt: now };
     const after = { page: afterPage, sections, assetIds: before.assetIds };
     const result = { pageId: page.id, version: nextVersion, action: 'update_page' };
-    return commitPageMutation(commandId, command, page, payload.expectedVersion, 'update_page', before, after, [pageUpdateStatement(page, payload.expectedVersion, fields.join(','), binds, nextVersion, now)], result);
+    return commitPageMutation(execution, page, payload.expectedVersion, 'update_page', before, after, [pageUpdateStatement(page, payload.expectedVersion, fields.join(','), binds, nextVersion, now)], result);
   }
 
   if (command === 'insert_page_section') {
@@ -416,7 +423,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const sections = [...current.map((section) => ({ ...section })), inserted].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id)).map((section, index) => ({ ...section, position: index }));
     const before = snapshot(page, current), nextVersion = page.version + 1, after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: id, version: nextVersion, action: 'insert_page_section' };
     const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, sections), env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id, page.id, inserted.sectionType, position, inserted.variant, JSON.stringify(inserted.props), inserted.status, 1, now, now)];
-    return commitPageMutation(commandId, command, page, payload.expectedVersion, 'insert_page_section', before, after, statements, result);
+    return commitPageMutation(execution, page, payload.expectedVersion, 'insert_page_section', before, after, statements, result);
   }
 
   if (command === 'update_page_section') {
@@ -425,7 +432,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const now = new Date().toISOString(), nextVersion = page.version + 1, nextSectionVersion = section.version + 1, updated = { ...section, sectionType: payload.sectionType as ModuleType, variant: payload.variant, props: payload.props, version: nextSectionVersion, updatedAt: now }, sections = current.map((item) => item.id === section.id ? updated : item);
     const before = snapshot(page, current), after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: section.id, version: nextVersion, sectionVersion: nextSectionVersion, action: 'update_page_section' };
     const statements = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET section_type=?,variant=?,props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(updated.sectionType, updated.variant, JSON.stringify(updated.props), updated.version, now, section.id, page.id, payload.expectedSectionVersion)];
-    return commitPageMutation(commandId, command, page, payload.expectedVersion, 'update_page_section', before, after, statements, result);
+    return commitPageMutation(execution, page, payload.expectedVersion, 'update_page_section', before, after, statements, result);
   }
 
   if (command === 'remove_page_section') {
@@ -433,7 +440,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     requirePermission(policy, 'remove'); checkPageVersion(page, payload.expectedVersion); checkSectionVersion(section, payload.expectedSectionVersion); assertModulePolicy(policy, section.sectionType, section.id);
     const remaining = current.filter((item) => item.id !== section.id).map((item, index) => ({ ...item, position: index })), before = snapshot(page, current), now = new Date().toISOString(), nextVersion = page.version + 1, after = snapshot({ ...page, version: nextVersion, updated_at: now }, remaining, nextVersion), result = { pageId: page.id, sectionId: section.id, version: nextVersion, action: 'remove_page_section' };
     const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, remaining), env.DB.prepare('DELETE FROM page_sections WHERE id=? AND page_id=? AND version=?').bind(section.id, page.id, payload.expectedSectionVersion)];
-    return commitPageMutation(commandId, command, page, payload.expectedVersion, 'remove_page_section', before, after, statements, result);
+    return commitPageMutation(execution, page, payload.expectedVersion, 'remove_page_section', before, after, statements, result);
   }
 
   if (command === 'reorder_page_sections') {
@@ -445,7 +452,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const missing = [...currentIds].filter((id) => !payload.sectionIds.includes(id));
     if (unknown.length || missing.length || payload.sectionIds.length !== current.length) throw pageError('PAGE_REORDER_SECTION_SET_MISMATCH', 'Reorder payload must contain the complete current section ID set.', { unknown, missing });
     const reordered = payload.sectionIds.map((id, position) => ({ ...current.find((section) => section.id === id)!, position })), before = snapshot(page, current), now = new Date().toISOString(), nextVersion = page.version + 1, after = snapshot({ ...page, version: nextVersion, updated_at: now }, reordered, nextVersion), result = { pageId: page.id, version: nextVersion, action: 'reorder_page_sections' };
-    return commitPageMutation(commandId, command, page, payload.expectedVersion, 'reorder_page_sections', before, after, [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, reordered)], result);
+    return commitPageMutation(execution, page, payload.expectedVersion, 'reorder_page_sections', before, after, [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, reordered)], result);
   }
 
   if (command === 'replace_page_section_asset') {
@@ -470,7 +477,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const now = new Date().toISOString(), nextVersion = page.version + 1, nextSectionVersion = section.version + 1, updated = { ...section, props, version: nextSectionVersion, updatedAt: now }, sections = current.map((item) => item.id === section.id ? updated : item), before = snapshot(page, current), after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: section.id, assetId, version: nextVersion, sectionVersion: nextSectionVersion, action: 'replace_page_section_asset' };
     const statements = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)];
     try {
-      return await commitPageMutation(commandId, command, page, payload.expectedVersion, 'replace_page_section_asset', before, after, statements, result);
+      return await commitPageMutation(execution, page, payload.expectedVersion, 'replace_page_section_asset', before, after, statements, result);
     } catch (error) {
       if (createdAsset) {
         try { await compensateUnassociatedAsset(assetId); }
@@ -491,7 +498,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const now = new Date().toISOString(), nextVersion = page.version + 1, restoredPage = { ...restored.page, version: nextVersion, updatedAt: now }, restoredSections = restored.sections.map((section, position) => ({ ...section, position, updatedAt: now })), before = snapshot(page, current), after = { page: restoredPage, sections: restoredSections, assetIds: collectSectionAssetIds(restoredSections) }, result = { pageId: page.id, version: nextVersion, revisionId: payload.revisionId, action: 'rollback_page' };
     const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, 'title=?,page_type=?,template_profile=?,status=?,seo_title=?,seo_description=?', [restoredPage.title, restoredPage.pageType, restoredPage.templateProfile, restoredPage.status, restoredPage.seoTitle, restoredPage.seoDescription], nextVersion, now), env.DB.prepare('DELETE FROM page_sections WHERE page_id=?').bind(page.id)];
     for (const section of restoredSections) statements.push(env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(section.id, page.id, section.sectionType, section.position, section.variant, JSON.stringify(section.props), section.status, section.version, section.createdAt, section.updatedAt));
-    return commitPageMutation(commandId, command, page, payload.expectedVersion, 'rollback_page', before, after, statements, result);
+    return commitPageMutation(execution, page, payload.expectedVersion, 'rollback_page', before, after, statements, result);
   }
 
   throw new CommandError('FATAL_SYSTEM_ERROR', 'PAGE_COMMAND_NOT_IMPLEMENTED', `Page command not implemented: ${command}`);

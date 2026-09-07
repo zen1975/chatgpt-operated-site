@@ -211,9 +211,35 @@ would, so each running attempt holds one
 | expired, different type or digest | `COMMAND_ID_REUSED` -- however old the lease |
 | no lease recorded | treated as live; never reclaimed blindly |
 
-Completion requires the **current** lease token, so an attempt that was
-superseded cannot write its result over the one that replaced it. Two racing
-reclaimers contend on the same statement, so only one wins.
+Two racing reclaimers contend on the same statement, so only one wins.
+
+**The lease is carried, never looked up.** Claiming or reclaiming returns an
+immutable execution context -- command id, type, digest, lease token and expiry
+-- threaded explicitly through `executeCommand`, every handler and every
+completion write. Keying request state by command id would fail in exactly the
+case leases exist for: an attempt that outlives its lease and the retry that
+reclaimed it can run in the same isolate, and the retry would overwrite that
+entry, handing the superseded attempt the retry's token and letting its cleanup
+delete the retry's lease.
+
+**The domain mutation itself is fenced.** A completion conditioned on the lease
+token only matches zero rows when the lease is gone, and zero rows is not an
+error, so it cannot abort anything: a superseded attempt could still commit its
+content and leave the replacement job running. D1 batches are SQL transactions
+-- "if a statement in the sequence fails... it aborts or rolls back the entire
+sequence" -- so the fence is a statement that *fails*. It writes 1 into
+`job_lease_fence.holds_lease` when the caller still holds the lease and 0 when
+it does not, and a CHECK constraint rejects 0.
+
+Every mutation batch runs through `fencedBatch`, which puts that statement
+first. A batch whose lease has been lost fails on its first statement, and the
+whole sequence rolls back: no content, taxonomy, asset, product, page, revision
+or projection write from a superseded attempt ever commits. Handlers additionally
+check affected rows explicitly, and the final success transition must affect
+exactly the one job row that lease owns.
+
+R2 objects are content-addressed, so a repeated write is harmless -- but their
+D1 registration is fenced like everything else.
 
 The lease outlasts any single attempt by design: `LEASE_DURATION_MS` is fifteen
 minutes against a supported attempt bound of five, and a Worker invocation is

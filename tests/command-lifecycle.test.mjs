@@ -154,7 +154,7 @@ test('admission runs before the job is claimed', () => {
 test('the handler scope records every failure', () => {
   const body = workerSource.slice(workerSource.indexOf('// From here the job is `running`'));
   assert.match(body, /try \{/, 'the handler must run inside a try');
-  assert.match(body, /catch \(e\) \{[\s\S]{0,300}recordFailure\(cmd\.commandId, cmd\.command, e\)/, 'every handler exception must be recorded as terminal');
+  assert.match(body, /catch \(e\) \{[\s\S]{0,400}recordFailure\(execution, e\)/, 'every handler exception must be recorded as terminal, under this attempt\'s own lease');
 });
 
 // The identity binding only holds if no handler writes its own job row.

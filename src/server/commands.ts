@@ -13,7 +13,7 @@ import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
 import { evaluateClaim, evaluateExistingJob } from './control-plane/replay';
-import { claimCommand, readJob, reopenFailedJob, reclaimExpiredLease, recordFailure, setLeaseToken, clearLeaseToken, successStatement, guardedSuccessStatement } from './control-plane/job-store';
+import { claimCommand, readJob, reopenFailedJob, reclaimExpiredLease, recordFailure, fencedBatch, successStatement, guardedSuccessStatement, assertOwnedRowAffected, type CommandExecution } from './control-plane/job-store';
 import { SITE_ID, SiteIdentityMismatch, assertCommandTargetsThisSite } from './site-identity';
 import { contractVersion } from './control-plane/contracts';
 import { RULE_VERSION } from './rule-version';
@@ -128,21 +128,24 @@ function contentSearchProjection(contentId:string, contentType:ContentRow['conte
   `).bind(now, contentId, contentType);
 }
 
-async function commitContentMutation(commandId:string, command:string, row:ContentRow, expectedVersion:number, action:string, updates:string, binds:unknown[], after:Record<string,unknown>, extraStatements:unknown[] = [], before:Record<string,unknown> = snapshot(row)) {
+async function commitContentMutation(execution:CommandExecution, row:ContentRow, expectedVersion:number, action:string, updates:string, binds:unknown[], after:Record<string,unknown>, extraStatements:unknown[] = [], before:Record<string,unknown> = snapshot(row)) {
   const nextVersion = expectedVersion + 1;
   const now = new Date().toISOString();
   const setClause = updates ? `${updates}, version=?, updated_at=?` : 'version=?, updated_at=?';
   const update = env.DB.prepare(`UPDATE news SET ${setClause} WHERE id=? AND content_type=? AND version=?`).bind(...binds, nextVersion, now, row.id, row.content_type, expectedVersion);
-  const revision = env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) SELECT ?,?,?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(uuid(),row.content_type,row.id,action,JSON.stringify(before),JSON.stringify(after),commandId,now,row.id,row.content_type,nextVersion);
+  const revision = env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) SELECT ?,?,?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(uuid(),row.content_type,row.id,action,JSON.stringify(before),JSON.stringify(after),execution.commandId,now,row.id,row.content_type,nextVersion);
   const result = { contentType:row.content_type, contentId:row.id, version:nextVersion, action };
-  const job = guardedSuccessStatement(commandId, command, result, { table: 'news', id: row.id, contentType: row.content_type, version: nextVersion }, now);
-  const batch = await env.DB.batch([update,...extraStatements,contentSearchProjection(row.id,row.content_type,now),revision,job] as never[]);
-  const changes = (batch[0] as { meta?: { changes?: number } })?.meta?.changes;
+  const job = guardedSuccessStatement(execution, result, { table: 'news', id: row.id, contentType: row.content_type, version: nextVersion }, now);
+  const batch = await fencedBatch(execution, [update,...extraStatements,contentSearchProjection(row.id,row.content_type,now),revision,job] as never[]);
+  // batch[0] is the lease fence; the guarded UPDATE is next. Its affected-row
+  // count is what proves the version guard held.
+  const changes = (batch[1] as { meta?: { changes?: number } })?.meta?.changes;
   if (changes !== 1) throw new CommandError('CONFLICT','CONTENT_VERSION_CONFLICT','Content changed during the command.',false,{expectedVersion,currentVersion:row.version});
+  assertOwnedRowAffected(execution, batch[batch.length - 1]);
   return result;
 }
 
-async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference'], runtime:CommandRuntime, commandId:string, role:string, commandType = 'replace_asset') {
+async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference'], runtime:CommandRuntime, execution:CommandExecution, role:string) {
   if (!reference) throw new CommandError('USER_CORRECTABLE','ASSET_REFERENCE_REQUIRED','Asset reference is required.');
   if (reference.provider === 'google_drive') {
     const configured = env as typeof env & { GOOGLE_DRIVE_ACCESS_TOKEN?: string; GOOGLE_DRIVE_REFRESH_TOKEN?: string; GOOGLE_DRIVE_CLIENT_ID?: string; GOOGLE_DRIVE_CLIENT_SECRET?: string; GOOGLE_DRIVE_SA_CLIENT_EMAIL?: string; GOOGLE_DRIVE_SA_PRIVATE_KEY?: string };
@@ -154,7 +157,7 @@ async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference']
       || (configured.GOOGLE_DRIVE_SA_CLIENT_EMAIL && configured.GOOGLE_DRIVE_SA_PRIVATE_KEY ? await getServiceAccountAccessToken({ clientEmail: configured.GOOGLE_DRIVE_SA_CLIENT_EMAIL, privateKey: configured.GOOGLE_DRIVE_SA_PRIVATE_KEY }) : undefined);
     if (!token) throw new CommandError('USER_CONFIRMATION_REQUIRED','DRIVE_ACCESS_TOKEN_REQUIRED','Google Drive access is not provisioned for this runtime.');
     const fetched = await fetchGoogleDriveAsset({ provider:'google_drive', fileId:reference.providerAssetId, expectedSha256:reference.expectedChecksum }, { accessToken:token, fetchImpl:runtime.googleDriveFetchImpl });
-    return ingestAsset({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, commandId, commandType);
+    return ingestAsset({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, execution);
   }
   const generatedArtifactFetcher = runtime.generatedArtifactFetcher || (() => {
     const origin=(env as typeof env & { GENERATED_ARTIFACT_ORIGIN?: string }).GENERATED_ARTIFACT_ORIGIN;
@@ -163,7 +166,7 @@ async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference']
   })();
   if (!generatedArtifactFetcher) throw new CommandError('USER_CONFIRMATION_REQUIRED','GENERATED_ARTIFACT_FETCHER_REQUIRED','Generated artifact transfer is not provisioned for this runtime.');
   const fetched = await fetchGeneratedArtifact({ provider:'generated', artifactId:reference.providerAssetId, expectedSha256:reference.expectedChecksum }, { fetchArtifact:generatedArtifactFetcher });
-  return ingestAsset({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, commandId, commandType);
+  return ingestAsset({ ...fetched.descriptor, variant:'original', alt:reference.alt, sourceMetadata:{ ...fetched.descriptor.sourceMetadata, ...reference.metadata, intendedRole:role } }, fetched.bytes, execution);
 }
 
 async function uniqueSlug(base:string, fallbackKey:string) {
@@ -283,13 +286,18 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
 
   // Transition to running, atomically. Each branch returns the lease this
   // attempt holds; completion is refused unless it still holds it.
-  let leaseToken: string;
+  //
+  // The result is an immutable execution context carrying this attempt's own
+  // lease. It is threaded explicitly from here through every handler and every
+  // completion write: a token recovered by looking up a commandId would hand a
+  // superseded attempt the lease of the attempt that replaced it.
+  let execution: CommandExecution;
   if (existing.kind === 'proceed-after-failure') {
-    leaseToken = await reopenFailedJob(cmd.commandId, cmd.command, digest);
+    execution = await reopenFailedJob(cmd.commandId, cmd.command, digest);
   } else if (existing.kind === 'reclaim-expired-lease') {
     // The previous attempt died without recording a terminal status. Only the
     // same command can take it over, and only while the lease is still expired.
-    leaseToken = await reclaimExpiredLease(cmd.commandId, cmd.command, digest);
+    execution = await reclaimExpiredLease(cmd.commandId, cmd.command, digest);
   } else {
     const claim = await claimCommand(cmd.commandId, cmd.command, digest);
     // Another submission may have claimed the id between the read above and
@@ -297,11 +305,10 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
     // executing alongside the winner.
     const outcome = evaluateClaim(cmd.commandId, cmd.command, digest, claim.stored, claim.claimId);
     if (outcome.kind === 'replay') return { success:true, commandId:cmd.commandId, idempotent:true, result: outcome.result };
-    leaseToken = outcome.kind === 'retry-after-failure'
+    execution = outcome.kind === 'retry-after-failure'
       ? await reopenFailedJob(cmd.commandId, cmd.command, digest)
-      : claim.leaseToken;
+      : claim.execution;
   }
-  setLeaseToken(cmd.commandId, leaseToken);
 
   // From here the job is `running`, so every exit must be terminal.
   try {
@@ -398,7 +405,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           reused: true
         };
 
-        await successStatement(cmd.commandId, cmd.command, result, now).run();
+        await successStatement(execution, result, now).run();
 
         return {
           success: true,
@@ -434,7 +441,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         status: 'published'
       };
 
-      await env.DB.batch([
+      await fencedBatch(execution, [
         env.DB.prepare(
           `INSERT INTO taxonomy_terms
            (id,taxonomy_id,parent_id,name,slug,description,canonical_path,sort_order,seo_title,seo_description,status)
@@ -468,7 +475,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           now
         ),
 
-        successStatement(cmd.commandId, cmd.command, result, now),
+        successStatement(execution, result, now),
       ]);
 
       return {
@@ -494,22 +501,23 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         contentSearchProjection(id,p.contentType,now),
         ...[...p.categoryTermIds,...p.tagTermIds].map(termId=>env.DB.prepare(`INSERT INTO content_term_links (content_type,content_id,term_id) VALUES (?,?,?)`).bind(p.contentType,id,termId)),
         env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),p.contentType,id,'create',null,JSON.stringify({...p,id,slug,status,url,templateProfile,seo,taxonomyTermIds:[...p.categoryTermIds,...p.tagTermIds],assetAssociations:[]}),cmd.commandId,now),
-        successStatement(cmd.commandId, cmd.command, result, now)
+        successStatement(execution, result, now)
       ];
-      await env.DB.batch(statements);
+      const batch = await fencedBatch(execution, statements);
+      assertOwnedRowAffected(execution, batch[batch.length - 1]);
       return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'create_product' || cmd.command === 'update_product' || cmd.command === 'publish_product' || cmd.command === 'archive_product' || cmd.command === 'replace_product_asset' || cmd.command === 'attach_product_asset' || cmd.command === 'remove_product_asset' || cmd.command === 'reorder_product_assets' || cmd.command === 'rollback_product') {
-      const result = await executeProductCommand(cmd.command, cmd.payload, cmd.commandId, {
-        resolveAssetReference: (reference, role) => resolveReferenceAsset(reference as ReplaceAssetCommand['reference'], runtime, `${cmd.commandId}:asset`, role, cmd.command)
+      const result = await executeProductCommand(execution, cmd.payload, {
+        resolveAssetReference: (reference: unknown, role: string) => resolveReferenceAsset(reference as ReplaceAssetCommand['reference'], runtime, execution, role)
       });
       return { success: true, commandId: cmd.commandId, result };
     }
 
     if (cmd.command === 'create_page' || cmd.command === 'update_page' || cmd.command === 'insert_page_section' || cmd.command === 'update_page_section' || cmd.command === 'remove_page_section' || cmd.command === 'reorder_page_sections' || cmd.command === 'replace_page_section_asset' || cmd.command === 'rollback_page' || cmd.command === 'insert_page_section_item' || cmd.command === 'update_page_section_item' || cmd.command === 'remove_page_section_item' || cmd.command === 'reorder_page_section_items' || cmd.command === 'replace_page_section_item_asset') {
-      const result = await executePageCommand(cmd.command, cmd.payload, cmd.commandId, {
-        resolveAssetReference: (reference, role) => resolveReferenceAsset(reference as ReplaceAssetCommand['reference'], runtime, `${cmd.commandId}:asset`, role, 'replace_page_section_asset')
+      const result = await executePageCommand(execution, cmd.payload, {
+        resolveAssetReference: (reference: unknown, role: string) => resolveReferenceAsset(reference as ReplaceAssetCommand['reference'], runtime, execution, role)
       });
       return { success: true, commandId: cmd.commandId, result };
     }
@@ -522,14 +530,14 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       if (changes.excerpt !== undefined) { fields.push('excerpt=?'); binds.push(changes.excerpt); }
       if (changes.blocks !== undefined) { fields.push('blocks_json=?'); binds.push(JSON.stringify(changes.blocks)); }
       const after={...before,...changes,blocks:changes.blocks ?? JSON.parse(row.blocks_json)};
-      const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'update',fields.join(','),binds,after,[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'update',fields.join(','),binds,after,[],before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'archive_content') {
       const p=ArchiveContentPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row);
       checkVersion(row,p.expectedVersion);
-      const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'archive','status=?',['archived'],{...before,status:'archived'},[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'archive','status=?',['archived'],{...before,status:'archived'},[],before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -538,13 +546,13 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       if (p.endsAt && p.endsAt <= p.startsAt) throw new CommandError('USER_CORRECTABLE','INVALID_PUBLISH_WINDOW','endsAt must be after startsAt');
       const row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
       const now=new Date().toISOString(), status=p.startsAt > now ? 'scheduled' : 'published';
-      const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'schedule','starts_at=?,ends_at=?,published_at=?,status=?',[p.startsAt,p.endsAt ?? null,p.startsAt,status],{...before,starts_at:p.startsAt,ends_at:p.endsAt ?? null,published_at:p.startsAt,status},[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'schedule','starts_at=?,ends_at=?,published_at=?,status=?',[p.startsAt,p.endsAt ?? null,p.startsAt,status],{...before,starts_at:p.startsAt,ends_at:p.endsAt ?? null,published_at:p.startsAt,status},[],before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'update_seo') {
       const p=UpdateSeoPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
-      const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'update_seo','seo_title=?,seo_description=?',[p.seoTitle,p.seoDescription],{...before,seo_title:p.seoTitle,seo_description:p.seoDescription},[],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'update_seo','seo_title=?,seo_description=?',[p.seoTitle,p.seoDescription],{...before,seo_title:p.seoTitle,seo_description:p.seoDescription},[],before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -571,7 +579,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         env.DB.prepare(`DELETE FROM content_assets WHERE content_type=? AND content_id=? AND EXISTS (SELECT 1 FROM news WHERE id=? AND content_type=? AND version=?)`).bind(p.contentType,p.contentId,p.contentId,p.contentType,nextVersion),
         ...assetAssociations.map((value) => env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,value.asset_id,value.role,value.position,new Date().toISOString(),p.contentId,p.contentType,nextVersion))
       ];
-      const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'rollback','title=?,excerpt=?,blocks_json=?,status=?,published_at=?,starts_at=?,ends_at=?,seo_title=?,seo_description=?',[restored.title,restored.excerpt ?? null,JSON.stringify(blocks),restored.status ?? row.status,restored.published_at ?? restored.publishedAt ?? row.published_at,restored.starts_at ?? restored.startsAt ?? row.starts_at,restored.ends_at ?? restored.endsAt ?? row.ends_at,restored.seo_title ?? restored.seo?.seoTitle ?? row.seo_title,restored.seo_description ?? restored.seo?.seoDescription ?? row.seo_description],{...restored,taxonomyTermIds,assetAssociations,blocks},relationStatements,before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'rollback','title=?,excerpt=?,blocks_json=?,status=?,published_at=?,starts_at=?,ends_at=?,seo_title=?,seo_description=?',[restored.title,restored.excerpt ?? null,JSON.stringify(blocks),restored.status ?? row.status,restored.published_at ?? restored.publishedAt ?? row.published_at,restored.starts_at ?? restored.startsAt ?? row.starts_at,restored.ends_at ?? restored.endsAt ?? row.ends_at,restored.seo_title ?? restored.seo?.seoTitle ?? row.seo_title,restored.seo_description ?? restored.seo?.seoDescription ?? row.seo_description],{...restored,taxonomyTermIds,assetAssociations,blocks},relationStatements,before);
       return {success:true,commandId:cmd.commandId,result:{...result,revisionId:p.revisionId}};
     }
 
@@ -580,14 +588,14 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       const asset=await env.DB.prepare('SELECT id FROM assets WHERE id=? LIMIT 1').bind(p.assetId).first<{id:string}>();
       if (!asset) throw new CommandError('USER_CORRECTABLE','ASSET_NOT_FOUND','The requested asset was not found.');
       const extra=env.DB.prepare(`INSERT OR IGNORE INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,p.assetId,p.role,p.position,new Date().toISOString(),p.contentId,p.contentType,p.expectedVersion+1);
-      const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'attach_asset','',[],{...before,assetAssociations:[...before.assetAssociations as Array<Record<string,unknown>>,{asset_id:p.assetId,role:p.role,position:p.position}]},[extra],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'attach_asset','',[],{...before,assetAssociations:[...before.assetAssociations as Array<Record<string,unknown>>,{asset_id:p.assetId,role:p.role,position:p.position}]},[extra],before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
     if (cmd.command === 'replace_asset') {
       const p=ReplaceAssetPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
       let ingestedAsset=false;
-      const assetId=p.assetId || (ingestedAsset=true, (await resolveReferenceAsset(p.reference, runtime, `${cmd.commandId}:asset`, p.role)).assetId);
+      const assetId=p.assetId || (ingestedAsset=true, (await resolveReferenceAsset(p.reference, runtime, execution, p.role)).assetId);
       const asset=await env.DB.prepare('SELECT id FROM assets WHERE id=? LIMIT 1').bind(assetId).first<{id:string}>();
       if (!asset) throw new CommandError('USER_CORRECTABLE','ASSET_NOT_FOUND','The requested asset was not found.');
       const when=new Date().toISOString();
@@ -595,7 +603,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       const add=env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,assetId,p.role,p.position,when,p.contentId,p.contentType,p.expectedVersion+1);
       try {
         const associations=(before.assetAssociations as Array<Record<string,unknown>>).filter((association) => !(association.role === p.role && association.position === p.position));
-        const result=await commitContentMutation(cmd.commandId,cmd.command,row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[remove,add],before);
+        const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[remove,add],before);
         return {success:true,commandId:cmd.commandId,result};
       } catch (error) {
         if (ingestedAsset) {
@@ -611,10 +619,10 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       if (p.endsAt && p.endsAt <= p.startsAt) throw new CommandError('USER_CORRECTABLE','INVALID_PUBLISH_WINDOW','endsAt must be after startsAt');
       const id=uuid(), now=new Date().toISOString(), status=p.startsAt > now ? 'scheduled':'published';
       const result={contentType:'timed_content',contentId:id,status};
-      await env.DB.batch([
+      await fencedBatch(execution, [
         env.DB.prepare(`INSERT INTO timed_contents (id,type,placement,title,body,link_label,link_url,starts_at,ends_at,priority,status,dismissible,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,p.type,p.placement,p.title||null,p.body||null,p.linkLabel||null,p.linkUrl||null,p.startsAt,p.endsAt||null,p.priority,status,p.dismissible?1:0,1,now,now),
         env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),'timed_content',id,'create',null,JSON.stringify({...p,id,status}),cmd.commandId,now),
-        successStatement(cmd.commandId, cmd.command, result, now)
+        successStatement(execution, result, now)
       ]);
       return {success:true,commandId:cmd.commandId,result};
     }
@@ -645,15 +653,10 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         p.reference,
         {
           allowedOrigins,
-          ingest: (descriptor, bytes, commandId) =>
-            ingestAsset(
-              descriptor,
-              bytes,
-              commandId,
-              'import_wordpress_asset'
-            )
+          ingest: (descriptor, bytes, asExecution) =>
+            ingestAsset(descriptor, bytes, asExecution)
         },
-        cmd.commandId
+        execution
       );
 
       return {
@@ -666,11 +669,9 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
     throw new CommandError('FATAL_SYSTEM_ERROR','COMMAND_NOT_IMPLEMENTED',`Command not implemented: ${cmd.command}`);
   } catch (e) {
     // The job is running; it must not stay that way. The write carries this
-    // attempt's lease, so a superseded attempt cannot overwrite the result of
-    // the one that replaced it.
-    await recordFailure(cmd.commandId, cmd.command, e);
+    // attempt's own lease, so a superseded attempt cannot overwrite the result
+    // of the one that replaced it -- its failure simply affects no rows.
+    await recordFailure(execution, e);
     throw e;
-  } finally {
-    clearLeaseToken(cmd.commandId);
   }
 }
