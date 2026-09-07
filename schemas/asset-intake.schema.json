@@ -1,30 +1,182 @@
 {
-  "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "type":"object",
-  "additionalProperties":false,
-  "required":["sourceProvider","sourceId","originalFilename","mimeType","bytes"],
-  "properties":{
-    "sourceProvider":{"enum":["generated","google_drive","wordpress","remote_url","upload","legacy"]},
-    "sourceId":{"type":"string","minLength":1,"maxLength":512},
-    "originalFilename":{"type":"string","minLength":1,"maxLength":255},
-    "mimeType":{"enum":["image/jpeg","image/png","image/webp","image/avif","application/pdf"]},
-    "bytes":{"type":"integer","minimum":1},
-    "width":{"type":["integer","null"],"minimum":1},
-    "height":{"type":["integer","null"],"minimum":1},
-    "expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
-    "sourceMetadata":{"type":"object","additionalProperties":{"type":["string","number","boolean","null"]}},
-    "alt":{"type":"string","maxLength":500},
-    "caption":{"type":["string","null"],"maxLength":1000},
-    "description":{"type":["string","null"],"maxLength":4000},
-    "variant":{"enum":["original","large","medium","thumbnail","ogp"]},
-    "associations":{"type":"array","maxItems":100,"items":{
-      "type":"object","additionalProperties":false,"required":["contentType","contentId","role"],
-      "properties":{
-        "contentType":{"type":"string","minLength":1,"maxLength":80},
-        "contentId":{"type":"string","minLength":1,"maxLength":200},
-        "role":{"enum":["hero","thumbnail","ogp","inline"]},
-        "position":{"type":"integer","minimum":0}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "sourceProvider": {
+      "type": "string",
+      "enum": [
+        "generated",
+        "google_drive",
+        "wordpress",
+        "remote_url",
+        "upload",
+        "legacy"
+      ]
+    },
+    "sourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "originalFilename": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "mimeType": {
+      "type": "string",
+      "enum": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/avif",
+        "application/pdf"
+      ]
+    },
+    "bytes": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "width": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "height": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "expectedSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "sourceMetadata": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 1000
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
-    }}
-  }
+    },
+    "alt": {
+      "default": "",
+      "type": "string",
+      "maxLength": 500
+    },
+    "caption": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 1000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 4000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "variant": {
+      "default": "original",
+      "type": "string",
+      "enum": [
+        "original",
+        "large",
+        "medium",
+        "thumbnail",
+        "ogp"
+      ]
+    },
+    "associations": {
+      "default": [],
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "contentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "hero",
+              "thumbnail",
+              "ogp",
+              "inline"
+            ]
+          },
+          "position": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "contentType",
+          "contentId",
+          "role"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "sourceProvider",
+    "sourceId",
+    "originalFilename",
+    "mimeType",
+    "bytes"
+  ],
+  "additionalProperties": false
 }
