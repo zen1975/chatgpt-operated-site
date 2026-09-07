@@ -51,10 +51,8 @@ test:contract` runs the contract suite in `tests/`, which asserts:
   Zod can express — required, type, enum, format, pattern, limits, uniqueItems,
   defaults, `additionalProperties` — is compared, not just property names
 - the migrations in `migrations/` are sequential, append-only, and apply in
-  order to a brand-new database, and their committed digests still match — an
-  already-applied migration must never be edited, even non-destructively, or
-  existing installations diverge from fresh ones (add a new migration and run
-  `npm run migrations:checksums`)
+  order to a brand-new database, and their committed digests still match (see
+  **Migrations are immutable** below)
 - no tracked file contains credential-shaped content, private-upstream
   identifiers, or non-English content, and each shipped example still carries
   placeholders in its declared installation-specific fields
@@ -67,6 +65,58 @@ test:contract` runs the contract suite in `tests/`, which asserts:
 If you change a schema, run `npm run schemas:generate` and commit the result.
 The failing contract test is telling you which downstream artifact to update —
 update it rather than relaxing the test.
+
+## Migrations are immutable
+
+An already-applied migration must never be edited — not even with entirely
+non-destructive SQL. Existing installations have run it and will never run it
+again, so they diverge permanently from a database built fresh. To change the
+schema, add a new sequential migration.
+
+This is enforced in **two complementary layers**, because neither is sufficient
+alone.
+
+### 1. Checksum manifest integrity — inside a distribution
+
+`migrations/CHECKSUMS.json` pins the content of every migration, and
+`npm run test:contract` fails when the manifest and the files disagree.
+
+This layer needs no git, which is why it also runs inside the Docker image,
+where there is neither git metadata nor a git binary. It answers: *is this copy
+of the distribution internally consistent?*
+
+What it **cannot** do is enforce immutability by itself. A contributor can edit
+an applied migration, run `npm run migrations:checksums`, and commit both
+changes — the manifest is then consistent again and this layer passes. The
+manifest records the edit; it does not prevent it.
+
+When you add a migration, run:
+
+```bash
+npm run migrations:checksums
+```
+
+### 2. Base-relative immutability — in pull-request CI
+
+Only the base revision knows what was already released, so pull requests are
+additionally checked against it:
+
+```bash
+npm run test:migrations:base -- --base <sha-or-ref>
+```
+
+Every `.sql` migration present in the base must still exist byte-for-byte. New
+migrations may be added; modifying, deleting, or renaming an existing one fails.
+CI runs this with the pull request's own base SHA — never a hardcoded branch —
+and `actions/checkout` uses `fetch-depth: 0` so the base revision is present.
+
+The check **fails closed**: if the base revision cannot be inspected — no base
+given, unresolvable ref, or a shallow clone missing the object — it exits
+non-zero rather than skipping. A check that passes silently when it cannot look
+is worse than no check.
+
+It is deliberately **not** part of `npm run verify`, so the container
+verification stays independent of git.
 
 ## Adding a new operable site area
 
@@ -93,6 +143,7 @@ vulnerabilities privately rather than in a pull request.
 - Include implementation, tests, and the documentation the change invalidates in
   the same pull request.
 - CI must pass. It runs the same `npm ci` / `npm run build` / `npm run
-  test:contract` a clean clone would.
+  test:contract` a clean clone would, plus the base-relative migration
+  immutability check and the container verification.
 - Never include production identifiers, customer content, credentials, or
   private acceptance evidence.
