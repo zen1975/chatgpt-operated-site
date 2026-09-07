@@ -63,6 +63,8 @@ validated payload rather than trusting that flag.
 - The workflow accepts one committed JSON file; it does not accept inline JSON.
 - Absolute paths, traversal, directories, symlinks, and uncommitted files are rejected.
 - A preflight receipt is short-lived evidence, not permission to bypass Worker checks.
+- The in-memory `create_asset` command is not a JSON transport. Use a bounded
+  provider reference for new assets in this workflow.
 - The included path is CI-tested. A disposable deployed-environment run and an
   actual ChatGPT-to-site acceptance run remain release acceptance steps.
 - Other orchestrators may replace Actions if they preserve the same signed
