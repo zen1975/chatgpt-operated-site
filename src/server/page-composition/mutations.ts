@@ -101,15 +101,19 @@ function collectSectionAssetIds(sections: Array<{ sectionType: string; props: un
   return [...new Set(sections.flatMap((section) => extractModuleAssetReferences(section).map((reference) => reference.assetId)))].sort();
 }
 
-async function assertAssetsExist(sectionType: string, props: unknown) {
-  const assetIds = extractModuleAssetReferences({ sectionType, props }).map((reference) => reference.assetId);
-  if (!assetIds.length) return assetIds;
+async function assertAssetsExist(sectionType: string, props: unknown, exempt: ReadonlySet<string> = new Set()) {
+  const referenced = extractModuleAssetReferences({ sectionType, props }).map((reference) => reference.assetId);
+  // An asset registered by this same fenced batch cannot be found in D1 yet.
+  // Only that exact id is exempt: every other slot is validated as usual, or a
+  // provider-backed replacement of one slot would stop checking the rest.
+  const assetIds = referenced.filter((id) => !exempt.has(id));
+  if (!assetIds.length) return referenced;
   const rows = await env.DB.prepare(`SELECT id,r2_key,validation_status,bytes FROM assets WHERE id IN (${assetIds.map(() => '?').join(',')})`).bind(...assetIds).all<{ id: string; r2_key: string | null; validation_status: string | null; bytes: number | null }>();
   const usable = await Promise.all((rows.results || []).map(async (row: { id: string; r2_key: string | null; validation_status: string | null; bytes: number | null }) => ({ row, available: await isAssetAvailable(row) })));
   const found = new Set(usable.filter((item: { available: boolean }) => item.available).map((item: { row: { id: string } }) => item.row.id));
   const missing = [...new Set(assetIds)].filter((id) => !found.has(id));
   if (missing.length) throw pageError('PAGE_ASSET_UNUSABLE', 'One or more page module assets are missing or unavailable.', { missing });
-  return [...new Set(assetIds)];
+  return [...new Set(referenced)];
 }
 
 async function assertReusableReferences(value: unknown, assetIds: string[] = []): Promise<string[]> {
@@ -126,16 +130,26 @@ async function assertReusableReferences(value: unknown, assetIds: string[] = [])
   return assetIds;
 }
 
-async function assertSectionAssets(sectionType: string, props: unknown) {
-  const direct = await assertAssetsExist(sectionType, props);
+/**
+ * Validate every asset a section references.
+ *
+ * `exempt` names assets being registered by the caller's own fenced batch, so
+ * they are not yet visible in D1. Nothing else is skipped -- a provider-backed
+ * replacement of one slot must still prove the other slots, and any reusable
+ * pattern it pulls in, are usable.
+ */
+async function assertSectionAssets(sectionType: string, props: unknown, exempt: ReadonlySet<string> = new Set()) {
+  const direct = await assertAssetsExist(sectionType, props, exempt);
   const reusable = sectionType === 'reusable' && props && typeof props === 'object' && !Array.isArray(props) && typeof (props as { ref?: unknown }).ref === 'string'
     ? await assertReusablePatternTree((props as { ref: string }).ref, env.DB)
     : await assertReusableReferences(props);
   if (reusable.length) {
-    const rows = await env.DB.prepare(`SELECT id,r2_key,validation_status,bytes FROM assets WHERE id IN (${reusable.map(() => '?').join(',')})`).bind(...reusable).all<{ id: string; r2_key: string | null; validation_status: string | null; bytes: number | null }>();
+    const pending = reusable.filter((id) => !exempt.has(id));
+    if (!pending.length) return [...new Set([...direct, ...reusable])];
+    const rows = await env.DB.prepare(`SELECT id,r2_key,validation_status,bytes FROM assets WHERE id IN (${pending.map(() => '?').join(',')})`).bind(...pending).all<{ id: string; r2_key: string | null; validation_status: string | null; bytes: number | null }>();
     const usable = await Promise.all((rows.results || []).map(async (row: { id: string; r2_key: string | null; validation_status: string | null; bytes: number | null }) => ({ row, available: await isAssetAvailable(row) })));
     const found = new Set(usable.filter((item: { available: boolean }) => item.available).map((item: { row: { id: string } }) => item.row.id));
-    const missing = [...new Set(reusable)].filter((id) => !found.has(id));
+    const missing = [...new Set(pending)].filter((id) => !found.has(id));
     if (missing.length) throw pageError('PAGE_ASSET_UNUSABLE', 'A reusable pattern references a missing or unavailable Asset.', { missing });
   }
   return [...new Set([...direct, ...reusable])];
@@ -487,8 +501,10 @@ export async function executePageCommand(execution: CommandExecution, input: unk
       const asset = await env.DB.prepare("SELECT id FROM assets WHERE id=? AND validation_status='validated' AND r2_key IS NOT NULL AND bytes > 0 LIMIT 1").bind(assetId).first<{ id: string }>();
       if (!asset) throw pageError('PAGE_ASSET_UNUSABLE', 'The requested Asset is missing or unavailable.');
     }
-    const props = cloneWithAssetPath(section.props, payload.assetPath, assetId); validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props }, section.id); // assertSectionAssets reads D1 too, so it is likewise skipped for an asset this batch is about to register.
-    if (!assetReference) await assertSectionAssets(section.sectionType, props);
+    const props = cloneWithAssetPath(section.props, payload.assetPath, assetId); validateSection(policy, { sectionType: section.sectionType, variant: section.variant, props }, section.id);
+    // Only the asset this batch is about to register is exempt; every other
+    // slot, and any reusable pattern the section pulls in, is still validated.
+    await assertSectionAssets(section.sectionType, props, assetReference ? new Set([assetId]) : new Set());
     const now = new Date().toISOString(), nextVersion = page.version + 1, nextSectionVersion = section.version + 1, updated = { ...section, props, version: nextSectionVersion, updatedAt: now }, sections = current.map((item) => item.id === section.id ? updated : item), before = snapshot(page, current), after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: section.id, assetId, version: nextVersion, sectionVersion: nextSectionVersion, action: 'replace_page_section_asset' };
     const statements = [...intakeStatements, pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), env.DB.prepare('UPDATE page_sections SET props_json=?,version=?,updated_at=? WHERE id=? AND page_id=? AND version=?').bind(JSON.stringify(props), nextSectionVersion, now, section.id, page.id, payload.expectedSectionVersion)];
     return await commitPageMutation(execution, page, payload.expectedVersion, 'replace_page_section_asset', before, after, namedMutations(statements), result);

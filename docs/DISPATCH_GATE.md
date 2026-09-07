@@ -62,23 +62,36 @@ repository's own configuration — so without this gate, a command prepared for
 one customer, run from the wrong repository or workflow, would be applied to
 whichever site the workflow points at.
 
-### Gate 4: derived from the payload, not declared by the caller
+### Gate 4: two questions, not one
 
-`context.requiresAssetIntake` is optional caller-supplied metadata, so it is not
-what decides whether readiness runs. The requirement is read out of the
-validated payload:
+`context.requiresAssetIntake` answers a contract question, and readiness answers
+an infrastructure one. They are deliberately not the same boolean.
+
+**Is the command image-bearing?** A property of the command itself. The
+operating contract requires the flag on every image-bearing operation, and a
+command naming an existing canonical `assetId` is still one of those. Answering
+this with "does a provider need to be ready?" rejected every such command before
+it reached preflight.
+
+| Image-bearing | Not image-bearing |
+| --- | --- |
+| `attach_asset`, `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset`, `replace_page_section_item_asset`, `import_wordpress_asset` | everything else, including `remove_product_asset` and `reorder_product_assets`, which rearrange assets already in place |
+
+The flag is required on the first set (`ASSET_INTAKE_FLAG_MISSING`) and refused
+on the second (`ASSET_INTAKE_FLAG_UNEXPECTED`).
+
+**Must a provider be ready?** Only when the asset actually arrives through one.
+Read from the validated payload:
 
 | Command | Intake source | Provider from |
 | --- | --- | --- |
 | `import_wordpress_asset` | always | the command itself (`wordpress`) |
-| `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset` | only when `payload.reference` is present | `payload.reference.provider` |
+| `replace_asset`, `replace_product_asset`, `replace_page_section_asset` | only when `payload.reference` is present | `payload.reference.provider` |
+| `attach_asset`, `attach_product_asset`, `replace_page_section_item_asset` | never — canonical `assetId` only | not applicable |
 
 A reference-bearing command may instead carry a canonical `assetId` that is
-already inside the Asset Engine; that needs no intake.
-
-The flag is then cross-checked against the derived answer, and a contradiction
-in **either** direction is rejected (`ASSET_INTAKE_FLAG_MISSING`,
-`ASSET_INTAKE_FLAG_UNEXPECTED`) rather than resolved silently.
+already inside the Asset Engine. That command is still image-bearing and still
+requires the flag; it simply needs no provider, so no readiness check runs.
 
 **Readiness is provider-specific.** `/api/control/readiness/asset-intake/`
 evaluates Google Drive credentials and the Drive intake folder — nothing else.
@@ -117,7 +130,8 @@ The supported public intake paths are therefore:
 
 | Command | Carries |
 | --- | --- |
-| `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset` | `payload.reference` — a provider plus a provider asset id — or a canonical `assetId` already in the Asset Engine |
+| `replace_asset`, `replace_product_asset`, `replace_page_section_asset` | `payload.reference` — a provider plus a provider asset id — or a canonical `assetId` already in the Asset Engine |
+| `attach_asset`, `attach_product_asset`, `replace_page_section_item_asset` | a canonical `assetId` only. These schemas reject a `reference` outright, so an asset must already be in the Asset Engine — bring it in with a replace command or a WordPress import first |
 | `import_wordpress_asset` | a WordPress media reference (source URL and id) |
 
 In each case the Worker resolves the reference and fetches the bytes itself,

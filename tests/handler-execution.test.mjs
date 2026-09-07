@@ -286,3 +286,87 @@ test('a page section replacement naming a missing canonical asset is rejected', 
     );
   });
 });
+
+// ------------------------------------- partial section asset validation
+
+/**
+ * A section with two asset slots: the one being replaced by a provider
+ * reference, and another already pointing at an unusable asset.
+ *
+ * Exempting the whole section during a provider-backed replacement would let
+ * this commit with a broken reference still in place.
+ */
+async function seedMultiAssetSection(runtime, execute, { brokenSlot = true } = {}) {
+  await execute(envelope('create_page', {
+    expectedVersion: 0, slug: 'about', title: 'About', pageType: 'standard', templateProfile: 'standard-default',
+    sections: [{ sectionType: 'cardGrid', variant: 'service', props: { items: [{ id: 'a', title: 'One' }, { id: 'b', title: 'Two' }] } }]
+  }, 'seed-page-multi-0001'));
+
+  const page = runtime.db.prepare('SELECT id,version FROM pages').get();
+  const section = runtime.db.prepare('SELECT id,version,props_json FROM page_sections').get();
+
+  // A second slot referencing an asset that exists but is unusable: its R2
+  // object is absent, which is exactly what isAssetAvailable rejects.
+  const otherAssetId = `asset_${'9'.repeat(64)}_original`;
+  if (brokenSlot) {
+    runtime.db.prepare(`INSERT INTO assets (id,r2_key,original_filename,mime_type,bytes,alt,variant,created_at,source_provider,sha256,logical_asset_id,validation_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(otherAssetId, 'assets/missing.jpg', 'b.jpg', 'image/jpeg', 4, '', 'original', 'now', 'generated', '9'.repeat(64), `logical_${'9'.repeat(64)}`, 'validated');
+    // No object is written to storage, so the asset is unavailable.
+  }
+
+  const props = JSON.parse(section.props_json);
+  props.items[1].assetId = otherAssetId;
+  runtime.db.prepare('UPDATE page_sections SET props_json=? WHERE id=?').run(JSON.stringify(props), section.id);
+
+  return { page, section, otherAssetId };
+}
+
+test('a provider-backed replacement still validates the other slots', async () => {
+  await withRuntime(async (runtime, execute) => {
+    const { page, section } = await seedMultiAssetSection(runtime, execute);
+
+    await assert.rejects(
+      () => execute(
+        envelope('replace_page_section_asset', {
+          pageId: page.id, expectedVersion: page.version,
+          sectionId: section.id, expectedSectionVersion: section.version,
+          assetPath: 'items[0].assetId',
+          reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'thumbnail' }
+        }),
+        { generatedArtifactFetcher }
+      ),
+      (error) => error.code === 'PAGE_ASSET_UNUSABLE',
+      'an unusable asset in another slot must still fail the command'
+    );
+
+    // Nothing may have been committed.
+    assert.deepEqual(runtime.db.prepare("SELECT id FROM assets WHERE source_provider='generated' AND sha256 != ?").all('9'.repeat(64)), [], 'no registration');
+    assert.equal(runtime.db.prepare('SELECT version FROM page_sections WHERE id=?').get(section.id).version, section.version, 'no section update');
+    assert.notEqual(jobRow(runtime.db, 'handler-replace-page-section-asset-0001')?.status, 'success', 'and no success');
+  });
+});
+
+test('a provider-backed replacement succeeds when the other slots are usable', async () => {
+  await withRuntime(async (runtime, execute) => {
+    const { page, section } = await seedMultiAssetSection(runtime, execute, { brokenSlot: false });
+
+    // The other slot points at nothing at all, so remove it and leave a single
+    // replaceable slot; the point here is that validation still runs.
+    const props = JSON.parse(runtime.db.prepare('SELECT props_json FROM page_sections WHERE id=?').get(section.id).props_json);
+    delete props.items[1].assetId;
+    runtime.db.prepare('UPDATE page_sections SET props_json=? WHERE id=?').run(JSON.stringify(props), section.id);
+
+    const result = await execute(
+      envelope('replace_page_section_asset', {
+        pageId: page.id, expectedVersion: page.version,
+        sectionId: section.id, expectedSectionVersion: section.version,
+        assetPath: 'items[0].assetId',
+        reference: { provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'thumbnail' }
+      }),
+      { generatedArtifactFetcher }
+    );
+
+    assert.equal(result.success, true, 'the prepared asset itself must be exempt from the pre-registration lookup');
+    assert.equal(runtime.db.prepare('SELECT COUNT(*) AS n FROM assets').get().n, 1);
+  });
+});
