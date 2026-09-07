@@ -23,7 +23,7 @@ export async function preflightCommand(input: unknown) {
   const payload: any = schema.parse(envelope.payload);
   if (PAGE_COMMANDS.has(envelope.command)) return success({ ...await preflightPageCommand(envelope.command, payload), commandId: envelope.commandId });
 
-  if (envelope.command === 'create_product' || envelope.command === 'create_news' || envelope.command === 'create_timed_content' || envelope.command === 'create_asset') {
+  if (envelope.command === 'create_product' || envelope.command === 'create_news' || envelope.command === 'create_timed_content') {
     if ('expectedVersion' in payload && payload.expectedVersion !== undefined && payload.expectedVersion !== null && payload.expectedVersion !== 0) stale('VERSION_CONFLICT', payload.expectedVersion, 0);
     return success({ ok: true, command: envelope.command, commandId: envelope.commandId });
   }

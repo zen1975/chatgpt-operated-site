@@ -27,7 +27,7 @@ export const TargetSite = z.string().min(1).max(200);
 export const CommandEnvelope = z.object({
   schemaVersion: z.literal(1),
   commandId: CommandId,
-  command: z.enum(['create_news','create_taxonomy_term','create_timed_content','create_asset','import_wordpress_asset','update_content','archive_content','rollback_content','schedule_content','attach_asset','replace_asset','update_seo','create_product','update_product','publish_product','archive_product','replace_product_asset','attach_product_asset','remove_product_asset','reorder_product_assets','rollback_product','create_page','update_page','insert_page_section','update_page_section','remove_page_section','reorder_page_sections','replace_page_section_asset','rollback_page','insert_page_section_item','update_page_section_item','remove_page_section_item','reorder_page_section_items','replace_page_section_item_asset']),
+  command: z.enum(['create_news','create_taxonomy_term','create_timed_content','import_wordpress_asset','update_content','archive_content','rollback_content','schedule_content','attach_asset','replace_asset','update_seo','create_product','update_product','publish_product','archive_product','replace_product_asset','attach_product_asset','remove_product_asset','reorder_product_assets','rollback_product','create_page','update_page','insert_page_section','update_page_section','remove_page_section','reorder_page_sections','replace_page_section_asset','rollback_page','insert_page_section_item','update_page_section_item','remove_page_section_item','reorder_page_section_items','replace_page_section_item_asset']),
   issuedAt: z.string().datetime(),
   context: z.object({
     ruleVersion:z.string(),
@@ -147,10 +147,27 @@ export const CreateTimedContentPayload = z.object({
   dismissible: z.boolean().default(false)
 }).strict();
 
-export const CreateAssetPayload = z.object({
-  descriptor: AssetIntakeDescriptor,
-  transfer: z.custom<Uint8Array>((value) => value instanceof Uint8Array, 'Asset transfer must be an in-memory Uint8Array')
-}).strict();
+/**
+ * Asset intake is not an externally dispatched command.
+ *
+ * `AssetIntakeDescriptor` says so in the Core boundary: "Binary transfer is
+ * intentionally not part of this descriptor. Trusted intake adapters pass bytes
+ * to ingestAsset inside the Core boundary; GitHub command JSON must never
+ * become a routine binary transport."
+ *
+ * A `create_asset` command therefore could not be expressed in JSON at all --
+ * its transfer is an in-memory Uint8Array -- so it was an advertised command no
+ * operator could ever send. It is not in the envelope enum, and the descriptor
+ * is re-exported here only so the published intake schema stays generated from
+ * the same source the runtime uses.
+ *
+ * The supported public intake path is a bounded provider reference
+ * (`AssetReference`) on `replace_asset`, `attach_product_asset`,
+ * `replace_product_asset` and `replace_page_section_asset`, or a WordPress
+ * media reference on `import_wordpress_asset`. Those carry an identifier, not
+ * bytes; the intake layer fetches the bytes inside the Worker.
+ */
+export { AssetIntakeDescriptor };
 
 export const ImportWordPressAssetPayload = z.object({
   reference: WordPressAssetReference
@@ -270,7 +287,6 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   create_news: CreateNewsPayload,
   create_taxonomy_term: CreateTaxonomyTermPayload,
   create_timed_content: CreateTimedContentPayload,
-  create_asset: CreateAssetPayload,
   import_wordpress_asset: ImportWordPressAssetPayload,
   update_content: UpdateContentPayload,
   archive_content: ArchiveContentPayload,

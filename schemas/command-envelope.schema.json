@@ -18,7 +18,6 @@
         "create_news",
         "create_taxonomy_term",
         "create_timed_content",
-        "create_asset",
         "import_wordpress_asset",
         "update_content",
         "archive_content",

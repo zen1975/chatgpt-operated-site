@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { CommandError } from './errors';
 import { uuid } from '../util';
+import { successStatement } from '../control-plane/job-store';
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 
@@ -180,7 +181,7 @@ export async function ingestAsset(input: unknown, bytes: AssetBinary, commandId:
       ...statements,
       ...associationStatements(asset, delivery.assetId, now),
       env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(), 'asset', delivery.assetId, existing ? 'reuse' : 'create', null, after, commandId, now),
-      env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,result_json=excluded.result_json,finished_at=excluded.finished_at`).bind(uuid(), commandId, commandType, 'success', 1, JSON.stringify(result), now, now)
+      successStatement(commandId, commandType, result, now)
     ]);
     return result;
   } catch (error) {

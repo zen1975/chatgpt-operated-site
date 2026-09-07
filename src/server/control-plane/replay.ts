@@ -14,6 +14,35 @@ export type ClaimOutcome =
   | { kind: 'retry-after-failure' };
 
 /**
+ * What an existing row means for a command that has not yet been admitted.
+ *
+ * Read-only: this decides whether to answer immediately, refuse, or continue to
+ * the admission checks. It never transitions anything, because a command that
+ * has not passed schema, rule-version, authorization and preflight must not
+ * leave a `running` row behind when one of those refuses it.
+ */
+export function evaluateExistingJob(commandId: string, commandType: string, submittedDigest: string, stored: StoredJob):
+  | { kind: 'replay'; result: unknown }
+  | { kind: 'proceed-new' }
+  | { kind: 'proceed-after-failure' } {
+  if (!stored) return { kind: 'proceed-new' };
+
+  if (!stored.command_digest) {
+    throw new CommandError('CONFLICT', 'COMMAND_DIGEST_UNVERIFIABLE', 'This commandId is already bound to a job that predates command digests, so it cannot be confirmed to be the same command. Issue a new commandId.', false, { commandId });
+  }
+  if (stored.command_digest !== submittedDigest || (stored.command_type && stored.command_type !== commandType)) {
+    throw new CommandError('CONFLICT', 'COMMAND_ID_REUSED', 'This commandId is already bound to a different command. A commandId identifies one immutable command and cannot be reused; issue a new commandId.', false, { commandId, storedCommand: stored.command_type, submittedCommand: commandType });
+  }
+  if (stored.status === 'success') {
+    return { kind: 'replay', result: stored.result_json ? JSON.parse(stored.result_json) : null };
+  }
+  if (stored.status === 'running') {
+    throw new CommandError('CONFLICT', 'COMMAND_IN_PROGRESS', 'This command is already executing. Wait for it to finish rather than running it a second time.', true, { commandId });
+  }
+  return { kind: 'proceed-after-failure' };
+}
+
+/**
  * The state machine for a command id, applied to the authoritative stored row.
  *
  * A commandId is bound to one immutable command by whoever claims it first, and
