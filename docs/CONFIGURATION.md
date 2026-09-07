@@ -35,6 +35,7 @@ Declared under `vars` in `wrangler.jsonc`.
 | `COMMAND_TRUSTED_ACTOR` | Actor name recorded for commands arriving on the trusted ingress. |
 | `COMMAND_TRUSTED_SCOPES` | Comma-separated mutation scopes granted to the trusted ingress. A command whose scope is absent is rejected before any payload validation or storage work. |
 | `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. |
+| `WORDPRESS_ASSET_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `import_wordpress_asset`. Not shipped in `wrangler.jsonc`: the command fails closed with `WORDPRESS_ASSET_ORIGIN_ALLOWLIST_REQUIRED` until an installation that wants WordPress import adds it. Add it to `vars` with the origins to import from, for example `https://legacy.example.com`. |
 
 Scope names are enumerated by `MUTATION_SCOPES` in `src/server/commands.ts`.
 Granting `*` disables scope separation and is not recommended for an
@@ -64,6 +65,15 @@ credential source.
 
 `GENERATED_ARTIFACT_ORIGIN` and `GENERATED_ARTIFACT_TOKEN` configure the
 generated-artifact intake adapter and are optional.
+
+## Keeping this page complete
+
+This page is not maintained by hand alone. `npm run test:contract` extracts
+every environment name `src/` actually reads — both `env.NAME` and the
+`env as typeof env & { NAME?: ... }` widening cast — and fails when a name is
+missing from `src/env.d.ts` or from this document. Adding a new runtime
+configuration read to the implementation therefore breaks CI until it is typed
+and documented here.
 
 Readiness is reported by `/api/control/readiness/asset-intake/`, which returns a
 verdict only and never echoes credential values. That check is owned by the

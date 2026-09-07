@@ -1,0 +1,35 @@
+# Keep the build context to what the distribution actually ships.
+#
+# Without this file, `COPY . .` embeds local credentials in image layers and
+# overwrites the container's clean Linux dependencies with host ones.
+
+# Git metadata. The contract checks fall back to a filesystem manifest when it
+# is absent, so the image verifies the distribution rather than the checkout.
+# `.gitignore` itself is kept: the hygiene checks assert what it excludes.
+.git
+
+# Dependencies and build output. `npm ci` inside the image installs these for
+# the image's own platform.
+node_modules
+dist
+.astro
+.wrangler
+.cache
+coverage
+
+# Local secrets. These must never reach an image layer.
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.pem
+*.key
+service-account*.json
+
+# Local noise.
+.DS_Store
+*.log
+
+# Note: examples/, schemas/, config/, migrations/, docs/, tests/ and scripts/
+# are deliberately NOT excluded. The contract checks verify them, and the image
+# runs the contract checks.
