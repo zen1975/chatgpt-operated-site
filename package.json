@@ -9,6 +9,7 @@
     "test": "npm run test:contract",
     "test:contract": "node --test \"tests/**/*.test.mjs\"",
     "verify": "npm run build && npm run test:contract",
+    "schemas:generate": "node scripts/generate-schemas.mjs",
     "preview": "astro preview",
     "deploy": "astro build && wrangler deploy",
     "cf:types": "wrangler types",

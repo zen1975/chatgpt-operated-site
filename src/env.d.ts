@@ -18,6 +18,9 @@ declare module 'cloudflare:workers' {
     GOOGLE_DRIVE_REFRESH_TOKEN?: string;
     GOOGLE_DRIVE_CLIENT_ID?: string;
     GOOGLE_DRIVE_CLIENT_SECRET?: string;
+    GOOGLE_DRIVE_SA_CLIENT_EMAIL?: string;
+    GOOGLE_DRIVE_SA_PRIVATE_KEY?: string;
+    WORDPRESS_ASSET_ALLOWED_ORIGINS?: string;
     GENERATED_ARTIFACT_ORIGIN?: string;
     GENERATED_ARTIFACT_TOKEN?: string;
     COMMAND_TRUSTED_SCOPES?: string;
