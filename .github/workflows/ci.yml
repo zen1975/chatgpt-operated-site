@@ -13,7 +13,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Full history: the migration immutability check below inspects the pull
+      # request's base revision, which a shallow clone does not contain.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
@@ -31,6 +36,16 @@ jobs:
       # configuration still agree with the implementation.
       - name: Contract checks
         run: npm run test:contract
+
+      # The checksum manifest pins migration content inside a distribution, but
+      # it cannot enforce immutability on its own: editing an applied migration
+      # and regenerating the manifest keeps it consistent. Only the base
+      # revision knows what was already released, so pull requests are also
+      # checked against it. The base SHA comes from the event -- never a
+      # hardcoded branch -- and the check fails closed if it cannot be read.
+      - name: Migration immutability (against the pull request base)
+        if: github.event_name == 'pull_request'
+        run: npm run test:migrations:base -- --base ${{ github.event.pull_request.base.sha }}
 
   # The documented container flow is a supported entry point for third parties
   # who will not match the pinned Node/npm versions on their host. It broke
