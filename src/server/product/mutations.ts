@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { successStatement, fencedBatch, assertOwnedRowAffected, type CommandExecution } from '../control-plane/job-store';
+import { successStatement, fencedBatch, named, assertOwnedRowAffected, SUCCESS_STATEMENT_NAME, type CommandExecution } from '../control-plane/job-store';
 import { CommandError } from '../core/errors';
 import { uuid } from '../util';
 import { CreateProductPayload, UpdateProductPayload, PublishProductPayload, ArchiveProductPayload, ReplaceProductAssetPayload, AttachProductAssetPayload, RemoveProductAssetPayload, ReorderProductAssetsPayload, RollbackProductPayload, type ReplaceProductAssetCommand } from '../command-schema';
@@ -21,7 +21,18 @@ const job = (execution: CommandExecution, result: unknown, now: string) => succe
 function revision(commandId: string, action: string, id: string, before: unknown, after: unknown, now: string) { return env.DB.prepare('INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(uuid(), 'product', id, action, JSON.stringify(before), JSON.stringify(after), commandId, now); }
 function updateStatement(product: ProductRow, expected: number, updates: string, values: unknown[], next: number, now: string) { return env.DB.prepare(`UPDATE products SET ${updates ? `${updates}, ` : ''}version=?,updated_at=? WHERE id=? AND version=?`).bind(...values, next, now, product.id, expected); }
 function searchProjection(productId: string, now: string) { return env.DB.prepare(`INSERT INTO search_documents (id,content_type,content_id,title,description,url,thumbnail,category,keywords_json,updated_at) SELECT 'product:' || p.id,'product',p.id,p.title,p.description,'/products/' || p.slug || '/',CASE WHEN a.r2_key IS NULL THEN NULL ELSE '/api/assets/' || replace(a.r2_key,'/','~') || '/' END,p.category,'[]',? FROM products p LEFT JOIN assets a ON a.id=p.primary_asset_id WHERE p.id=? ON CONFLICT(content_type,content_id) DO UPDATE SET title=excluded.title,description=excluded.description,url=excluded.url,thumbnail=excluded.thumbnail,category=excluded.category,updated_at=excluded.updated_at`).bind(now, productId); }
-async function commit(execution: CommandExecution, product: ProductRow, expected: number, action: string, before: unknown, after: unknown, statements: unknown[], result: unknown) { const now = new Date().toISOString(); const batch = await fencedBatch(execution, [...statements, searchProjection(product.id, now), revision(execution.commandId, action, product.id, before, after, now), job(execution, result, now)] as never[]); const changes = (batch[1] as { meta?: { changes?: number } })?.meta?.changes; if (changes !== 1) throw new CommandError('CONFLICT', 'PRODUCT_VERSION_CONFLICT', 'Product changed during the command.', false, { expectedVersion: expected, currentVersion: product.version }); assertOwnedRowAffected(execution, batch[batch.length - 1]); return result; }
+async function commit(execution: CommandExecution, product: ProductRow, expected: number, action: string, before: unknown, after: unknown, statements: unknown[], result: unknown) {
+  const now = new Date().toISOString();
+  // The product version is a fence, so a product that moved on aborts the batch.
+  const results = await fencedBatch(execution, [
+    ...statements.map((statement, index) => named(`mutation-${index}`, statement)),
+    named('projection', searchProjection(product.id, now)),
+    named('revision', revision(execution.commandId, action, product.id, before, after, now)),
+    named(SUCCESS_STATEMENT_NAME, job(execution, result, now))
+  ], { versionGuards: [{ subject: 'products', expectedVersion: expected, keys: [product.id, expected] }] });
+  assertOwnedRowAffected(execution, results);
+  return result;
+}
 function check(product: ProductRow, expected: number) { if (product.version !== expected) throw new CommandError('CONFLICT', 'PRODUCT_VERSION_CONFLICT', 'Product version does not match expectedVersion.', false, { expectedVersion: expected, currentVersion: product.version }); }
 function productValues(product: ProductRow, changes: Record<string, unknown>) { return { ...product, ...changes }; }
 

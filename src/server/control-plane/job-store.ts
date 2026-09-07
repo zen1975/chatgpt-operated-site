@@ -100,6 +100,17 @@ export const JOB_SQL = {
     `INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at)
      VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET ${COMPLETION_SET}
      WHERE jobs.lease_token IS NOT NULL AND jobs.lease_token = ?`,
+  /**
+   * Proves the guarded row is still at the expected version, as a statement
+   * that FAILS when it is not.
+   *
+   * `<GUARD>` is substituted from a fixed map below -- never from a payload --
+   * so no caller can influence the table or the predicate.
+   */
+  versionFence:
+    `INSERT INTO command_version_fence (command_id, subject, expected_version, matches, checked_at)
+     VALUES (?, ?, ?, (SELECT COUNT(*) FROM <GUARD>), ?)
+     ON CONFLICT(command_id, subject) DO UPDATE SET expected_version=excluded.expected_version, matches=excluded.matches, checked_at=excluded.checked_at`,
   failure:
     `INSERT INTO jobs (id,command_id,command_type,status,attempt_count,error_type,error_code,error_message,created_at,finished_at)
      VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -107,6 +118,29 @@ export const JOB_SQL = {
        status=excluded.status,error_type=excluded.error_type,error_code=excluded.error_code,error_message=excluded.error_message,finished_at=excluded.finished_at,lease_token=NULL,lease_expires_at=NULL
      WHERE jobs.lease_token IS NOT NULL AND jobs.lease_token = ?`
 } as const;
+
+/**
+ * The rows an optimistic version guard may be taken against.
+ *
+ * A closed map, so the table and the predicate are always literals from this
+ * file. Adding a version-guarded mutation means adding an entry here, which is
+ * also what makes the set enumerable by the contract tests.
+ */
+export const VERSION_GUARDS = {
+  news: { table: 'news', predicate: 'id=? AND content_type=? AND version=?', arity: 3 },
+  products: { table: 'products', predicate: 'id=? AND version=?', arity: 2 },
+  pages: { table: 'pages', predicate: 'id=? AND version=?', arity: 2 },
+  page_sections: { table: 'page_sections', predicate: 'id=? AND version=?', arity: 2 }
+} as const;
+
+export type VersionGuardSubject = keyof typeof VERSION_GUARDS;
+
+export type VersionGuard = {
+  readonly subject: VersionGuardSubject;
+  readonly expectedVersion: number;
+  /** Values for the guard's predicate, in order. */
+  readonly keys: readonly (string | number)[];
+};
 
 /** The guarded completion, whose guard table is fixed by the caller. */
 export const guardedSuccessSql = (table: 'news') =>
@@ -184,32 +218,95 @@ export async function renewLease(execution: CommandExecution): Promise<CommandEx
  * The success statement, for handlers that complete inside a D1 batch so the
  * job lands in the same transaction as the mutation it records.
  */
-/** The fence, as a statement, for placing at the head of a mutation batch. */
-export function fenceStatement(execution: CommandExecution, now = new Date().toISOString()) {
+/** The lease fence, as a statement, for the head of a mutation batch. */
+export function leaseFenceStatement(execution: CommandExecution, now = new Date().toISOString()) {
   return env.DB.prepare(JOB_SQL.fence).bind(execution.commandId, execution.leaseToken, execution.commandId, execution.leaseToken, now);
 }
 
 /**
- * Run a mutation batch fenced by the caller's lease.
- *
- * The fence goes first, so a batch whose lease has been lost fails on its very
- * first statement and D1 rolls the whole sequence back: no content, taxonomy,
- * asset, product, page, revision or projection write from a superseded attempt
- * ever commits. Handlers call this instead of env.DB.batch, and a contract test
- * fails the build if one goes around it.
+ * The version fence. Fails -- and so rolls the batch back -- when the guarded
+ * row is no longer at the expected version.
  */
-export async function fencedBatch(execution: CommandExecution, statements: unknown[]) {
+export function versionFenceStatement(execution: CommandExecution, guard: VersionGuard, now = new Date().toISOString()) {
+  const definition = VERSION_GUARDS[guard.subject];
+  if (!definition) throw new CommandError('FATAL_SYSTEM_ERROR', 'VERSION_GUARD_UNKNOWN', `No version guard is registered for ${guard.subject}.`);
+  if (guard.keys.length !== definition.arity) {
+    throw new CommandError('FATAL_SYSTEM_ERROR', 'VERSION_GUARD_ARITY', `The ${guard.subject} version guard expects ${definition.arity} keys.`);
+  }
+  const sql = JOB_SQL.versionFence.replace('<GUARD>', `${definition.table} WHERE ${definition.predicate}`);
+  return env.DB.prepare(sql).bind(execution.commandId, guard.subject, guard.expectedVersion, ...guard.keys, now);
+}
+
+/**
+ * A statement paired with the name its result is looked up by.
+ *
+ * Results are never read by position. Batches are assembled from several
+ * sources -- fences, optional intake registration, the domain mutation, a
+ * revision, the completion -- so a fixed index silently means something
+ * different as soon as any of those changes length. That already happened
+ * twice: adding the lease fence shifted the guarded update from index 0 to 1,
+ * and adding intake registration shifted it again.
+ */
+export type NamedStatement = { readonly name: string; readonly statement: unknown };
+
+export const named = (name: string, statement: unknown): NamedStatement => ({ name, statement });
+
+/** Batch results, addressable only by name. */
+export type NamedResults = {
+  get(name: string): { meta?: { changes?: number } } | undefined;
+  changes(name: string): number | undefined;
+  names(): string[];
+};
+
+/**
+ * Run a mutation batch fenced by the caller's lease and, where the mutation is
+ * version-guarded, by the expected version.
+ *
+ * Order is fixed and meaningful:
+ *   lease fence -> version fence -> caller statements (intake, mutation,
+ *   revision, the sole success transition)
+ *
+ * Both fences fail rather than match nothing, so a lost lease or an advanced
+ * version aborts the sequence and D1 rolls back everything: no intake
+ * registration, no attachment, no revision, no success.
+ */
+export async function fencedBatch(
+  execution: CommandExecution,
+  statements: NamedStatement[],
+  options: { versionGuards?: VersionGuard[] } = {}
+): Promise<NamedResults> {
+  const now = new Date().toISOString();
+  const prefix: NamedStatement[] = [named('lease-fence', leaseFenceStatement(execution, now))];
+  for (const guard of options.versionGuards ?? []) {
+    prefix.push(named(`version-fence:${guard.subject}`, versionFenceStatement(execution, guard, now)));
+  }
+
+  const all = [...prefix, ...statements];
+  let results: unknown[];
   try {
-    return await env.DB.batch([fenceStatement(execution), ...statements] as never[]);
+    results = await env.DB.batch(all.map((entry) => entry.statement) as never[]);
   } catch (error) {
     if (isLeaseFenceViolation(error)) {
       throw new CommandError('CONFLICT', 'COMMAND_LEASE_LOST', 'This attempt no longer holds the command lease; another attempt has taken over, so its changes were not applied.', false, { commandId: execution.commandId });
     }
+    if (isVersionFenceViolation(error)) {
+      throw new CommandError('CONFLICT', 'VERSION_CONFLICT', 'The target changed while this command was running, so none of its changes were applied.', false, { commandId: execution.commandId, guards: (options.versionGuards ?? []).map((guard) => ({ subject: guard.subject, expectedVersion: guard.expectedVersion })) });
+    }
     throw error;
   }
+
+  const byName = new Map<string, { meta?: { changes?: number } }>();
+  all.forEach((entry, index) => byName.set(entry.name, results[index] as { meta?: { changes?: number } }));
+
+  return {
+    get: (name) => byName.get(name),
+    changes: (name) => byName.get(name)?.meta?.changes,
+    names: () => [...byName.keys()]
+  };
 }
 
 const isLeaseFenceViolation = (error: unknown) => /holds_lease|job_lease_fence/i.test(error instanceof Error ? error.message : String(error));
+const isVersionFenceViolation = (error: unknown) => /\bmatches\b|command_version_fence/i.test(error instanceof Error ? error.message : String(error));
 
 /**
  * The success statement. Carries the caller's own lease token -- never one
@@ -248,8 +345,8 @@ export async function recordSuccess(execution: CommandExecution, result: unknown
  * The final transition must affect exactly the one row this lease owns. Zero
  * rows means the lease was lost between the fence and the completion.
  */
-export function assertOwnedRowAffected(execution: CommandExecution, outcome: unknown) {
-  const changes = (outcome as { meta?: { changes?: number } })?.meta?.changes;
+export function assertOwnedRowAffected(execution: CommandExecution, results: NamedResults, name = 'success') {
+  const changes = results.changes(name);
   if (changes === 0) {
     throw new CommandError('CONFLICT', 'COMMAND_LEASE_LOST', 'This attempt no longer holds the command lease, so its completion was not recorded.', false, { commandId: execution.commandId });
   }
@@ -257,6 +354,9 @@ export function assertOwnedRowAffected(execution: CommandExecution, outcome: unk
     throw new CommandError('FATAL_SYSTEM_ERROR', 'COMMAND_COMPLETION_AMBIGUOUS', 'The completion affected more than one job row.', false, { commandId: execution.commandId, changes });
   }
 }
+
+/** Name used for the sole success transition in every fenced batch. */
+export const SUCCESS_STATEMENT_NAME = 'success';
 
 /**
  * Terminal failure, under this attempt's own lease. A superseded attempt's

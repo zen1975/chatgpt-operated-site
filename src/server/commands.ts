@@ -13,7 +13,7 @@ import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
 import { evaluateClaim, evaluateExistingJob } from './control-plane/replay';
-import { claimCommand, readJob, reopenFailedJob, reclaimExpiredLease, recordFailure, fencedBatch, successStatement, guardedSuccessStatement, assertOwnedRowAffected, type CommandExecution } from './control-plane/job-store';
+import { claimCommand, readJob, reopenFailedJob, reclaimExpiredLease, recordFailure, fencedBatch, named, successStatement, guardedSuccessStatement, assertOwnedRowAffected, SUCCESS_STATEMENT_NAME, type CommandExecution, type NamedStatement } from './control-plane/job-store';
 import { SITE_ID, SiteIdentityMismatch, assertCommandTargetsThisSite } from './site-identity';
 import { contractVersion } from './control-plane/contracts';
 import { RULE_VERSION } from './rule-version';
@@ -128,7 +128,7 @@ function contentSearchProjection(contentId:string, contentType:ContentRow['conte
   `).bind(now, contentId, contentType);
 }
 
-async function commitContentMutation(execution:CommandExecution, row:ContentRow, expectedVersion:number, action:string, updates:string, binds:unknown[], after:Record<string,unknown>, extraStatements:unknown[] = [], before:Record<string,unknown> = snapshot(row)) {
+async function commitContentMutation(execution:CommandExecution, row:ContentRow, expectedVersion:number, action:string, updates:string, binds:unknown[], after:Record<string,unknown>, extraStatements:NamedStatement[] = [], before:Record<string,unknown> = snapshot(row)) {
   const nextVersion = expectedVersion + 1;
   const now = new Date().toISOString();
   const setClause = updates ? `${updates}, version=?, updated_at=?` : 'version=?, updated_at=?';
@@ -136,20 +136,21 @@ async function commitContentMutation(execution:CommandExecution, row:ContentRow,
   const revision = env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) SELECT ?,?,?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(uuid(),row.content_type,row.id,action,JSON.stringify(before),JSON.stringify(after),execution.commandId,now,row.id,row.content_type,nextVersion);
   const result = { contentType:row.content_type, contentId:row.id, version:nextVersion, action };
   const job = guardedSuccessStatement(execution, result, { table: 'news', id: row.id, contentType: row.content_type, version: nextVersion }, now);
-  const batch = await fencedBatch(execution, [update,...extraStatements,contentSearchProjection(row.id,row.content_type,now),revision,job] as never[]);
-  // batch[0] is the lease fence; the guarded UPDATE is next. Its affected-row
-  // count is what proves the version guard held.
-  const changes = (batch[1] as { meta?: { changes?: number } })?.meta?.changes;
-  if (changes !== 1) throw new CommandError('CONFLICT','CONTENT_VERSION_CONFLICT','Content changed during the command.',false,{expectedVersion,currentVersion:row.version});
-  assertOwnedRowAffected(execution, batch[batch.length - 1]);
+
+  // The version guard is a fence, not an after-the-fact row count: if the
+  // content has moved on, the batch fails and nothing commits.
+  const results = await fencedBatch(execution, [
+    ...extraStatements,
+    named('domain-update', update),
+    named('projection', contentSearchProjection(row.id,row.content_type,now)),
+    named('revision', revision),
+    named(SUCCESS_STATEMENT_NAME, job)
+  ], { versionGuards: [{ subject: 'news', expectedVersion, keys: [row.id, row.content_type, expectedVersion] }] });
+
+  assertOwnedRowAffected(execution, results);
   return result;
 }
 
-/**
- * Fetches and prepares a referenced asset. Returns the preparation -- result
- * plus the D1 statements that register it -- so the *outer* command can put
- * those statements into its own final fenced batch. It never completes the job.
- */
 async function resolveReferenceAsset(reference: ReplaceAssetCommand['reference'], runtime:CommandRuntime, execution:CommandExecution, role:string): Promise<AssetIntakePreparation> {
   if (!reference) throw new CommandError('USER_CORRECTABLE','ASSET_REFERENCE_REQUIRED','Asset reference is required.');
   if (reference.provider === 'google_drive') {
@@ -502,14 +503,14 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       const seo=resolveSeo(p.title,p.excerpt,p.seoTitle,p.seoDescription);
       const result={contentType:p.contentType,contentId:id,status,url,templateProfile};
       const statements=[
-        env.DB.prepare(`INSERT INTO news (id,slug,title,excerpt,blocks_json,content_type,status,published_at,starts_at,ends_at,seo_title,seo_description,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,slug,p.title,p.excerpt||null,JSON.stringify(p.blocks),p.contentType,status,publishedAt,p.startsAt||now,p.endsAt||null,seo.seoTitle,seo.seoDescription,1,now,now),
-        contentSearchProjection(id,p.contentType,now),
-        ...[...p.categoryTermIds,...p.tagTermIds].map(termId=>env.DB.prepare(`INSERT INTO content_term_links (content_type,content_id,term_id) VALUES (?,?,?)`).bind(p.contentType,id,termId)),
-        env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),p.contentType,id,'create',null,JSON.stringify({...p,id,slug,status,url,templateProfile,seo,taxonomyTermIds:[...p.categoryTermIds,...p.tagTermIds],assetAssociations:[]}),cmd.commandId,now),
-        successStatement(execution, result, now)
+        named('domain-insert', env.DB.prepare(`INSERT INTO news (id,slug,title,excerpt,blocks_json,content_type,status,published_at,starts_at,ends_at,seo_title,seo_description,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,slug,p.title,p.excerpt||null,JSON.stringify(p.blocks),p.contentType,status,publishedAt,p.startsAt||now,p.endsAt||null,seo.seoTitle,seo.seoDescription,1,now,now)),
+        named('projection', contentSearchProjection(id,p.contentType,now)),
+        ...[...p.categoryTermIds,...p.tagTermIds].map((termId, index)=>named(`term-link-${index}`, env.DB.prepare(`INSERT INTO content_term_links (content_type,content_id,term_id) VALUES (?,?,?)`).bind(p.contentType,id,termId))),
+        named('revision', env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),p.contentType,id,'create',null,JSON.stringify({...p,id,slug,status,url,templateProfile,seo,taxonomyTermIds:[...p.categoryTermIds,...p.tagTermIds],assetAssociations:[]}),cmd.commandId,now)),
+        named(SUCCESS_STATEMENT_NAME, successStatement(execution, result, now))
       ];
-      const batch = await fencedBatch(execution, statements);
-      assertOwnedRowAffected(execution, batch[batch.length - 1]);
+      const results = await fencedBatch(execution, statements);
+      assertOwnedRowAffected(execution, results);
       return {success:true,commandId:cmd.commandId,result};
     }
 
@@ -599,23 +600,32 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
 
     if (cmd.command === 'replace_asset') {
       const p=ReplaceAssetPayload.parse(cmd.payload), row=await getContent(p.contentType,p.contentId), before=await fullSnapshot(row); checkVersion(row,p.expectedVersion);
-      // Intake prepares the asset and hands back its D1 registration; this
-      // command commits those statements in its own fenced batch and performs
-      // the single success transition.
-      let intakeStatements: unknown[] = [];
-      let assetId = p.assetId;
-      if (!assetId) {
+
+      // Two distinct paths, deliberately not merged.
+      //
+      // A canonical assetId names an asset that must already exist, so it is
+      // verified against D1 as before. A provider reference is prepared here
+      // and *registered in this command's own batch* -- so looking it up now
+      // would query for a row this command has not written yet, which is what
+      // made every first-time reference-backed replacement fail with
+      // ASSET_NOT_FOUND while orphaning the object it had just uploaded.
+      let intakeStatements: NamedStatement[] = [];
+      let assetId: string;
+      if (p.assetId) {
+        assetId = p.assetId;
+        const asset=await env.DB.prepare('SELECT id FROM assets WHERE id=? LIMIT 1').bind(assetId).first<{id:string}>();
+        if (!asset) throw new CommandError('USER_CORRECTABLE','ASSET_NOT_FOUND','The requested asset was not found.');
+      } else {
         const prepared = await resolveReferenceAsset(p.reference, runtime, execution, p.role);
         assetId = prepared.result.assetId;
-        intakeStatements = prepared.statements;
+        intakeStatements = prepared.statements.map((statement, index) => named(`intake-${index}`, statement));
       }
-      const asset=await env.DB.prepare('SELECT id FROM assets WHERE id=? LIMIT 1').bind(assetId).first<{id:string}>();
-      if (!asset) throw new CommandError('USER_CORRECTABLE','ASSET_NOT_FOUND','The requested asset was not found.');
+
       const when=new Date().toISOString();
       const remove=env.DB.prepare(`DELETE FROM content_assets WHERE content_type=? AND content_id=? AND role=? AND position=? AND EXISTS (SELECT 1 FROM news WHERE id=? AND content_type=? AND version=?)`).bind(p.contentType,p.contentId,p.role,p.position,p.contentId,p.contentType,p.expectedVersion+1);
       const add=env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) SELECT ?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(p.contentType,p.contentId,assetId,p.role,p.position,when,p.contentId,p.contentType,p.expectedVersion+1);
       const associations=(before.assetAssociations as Array<Record<string,unknown>>).filter((association) => !(association.role === p.role && association.position === p.position));
-      const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[...intakeStatements,remove,add],before);
+      const result=await commitContentMutation(execution, row,p.expectedVersion,'replace_asset','',[],{...before,assetAssociations:[...associations,{asset_id:assetId,role:p.role,position:p.position}]},[...intakeStatements,named('asset-detach',remove),named('asset-attach',add)],before);
       return {success:true,commandId:cmd.commandId,result};
     }
 
