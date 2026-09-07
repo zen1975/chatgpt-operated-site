@@ -98,6 +98,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'src/env.d.ts',
   'scripts/dispatch-command.mjs',
   'src/pages/api/control/commands/[commandId].ts',
+  'src/server/control-plane/job-store.ts',
   'src/server/control-plane/replay.ts',
   'src/server/site-identity.ts',
   'src/server/command-schema.ts',

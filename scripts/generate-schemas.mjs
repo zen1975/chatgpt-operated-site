@@ -21,9 +21,10 @@ export async function generateSchemas() {
   return {
     'schemas/command-envelope.schema.json': z.toJSONSchema(contracts.CommandEnvelope, { io: 'input' }),
     'schemas/create-news.schema.json': z.toJSONSchema(contracts.COMMAND_PAYLOAD_SCHEMAS.create_news, { io: 'input' }),
-    // The intake descriptor is the `create_asset` payload minus its binary
-    // transfer, which is deliberately not carried in command JSON.
-    'schemas/asset-intake.schema.json': z.toJSONSchema(contracts.COMMAND_PAYLOAD_SCHEMAS.create_asset.shape.descriptor, { io: 'input' })
+    // The intake descriptor used by the intake layer. Published because
+    // adapters and installers consume it -- not because it is a command
+    // payload: byte transfer is never carried in command JSON.
+    'schemas/asset-intake.schema.json': z.toJSONSchema(contracts.AssetIntakeDescriptor, { io: 'input' })
   };
 }
 

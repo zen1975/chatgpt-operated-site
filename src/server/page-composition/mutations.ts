@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { successStatement } from '../control-plane/job-store';
 import { CommandError } from '../core/errors';
 import { uuid } from '../util';
 import { extractModuleAssetReferences, getModuleAssetSlot, validatePageModule } from './registry';
@@ -170,7 +171,7 @@ function revisionStatement(commandId: string, pageId: string, action: string, be
 }
 
 function jobStatement(commandId: string, command: string, result: unknown, now: string) {
-  return env.DB.prepare('INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,result_json=excluded.result_json,finished_at=excluded.finished_at').bind(uuid(), commandId, command, 'success', 1, JSON.stringify(result), now, now);
+  return successStatement(commandId, command, result, now);
 }
 
 function positionStatements(pageId: string, sections: Array<{ id: string; position: number }>) {

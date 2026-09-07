@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
-import { CommandEnvelope, CreateAssetPayload, ImportWordPressAssetPayload, CreateNewsPayload, CreateTaxonomyTermPayload, CreateTimedContentPayload, UpdateContentPayload, ArchiveContentPayload, RollbackContentPayload, ScheduleContentPayload, AttachAssetPayload, ReplaceAssetPayload, UpdateSeoPayload, type ReplaceAssetCommand } from './command-schema';
+import { COMMAND_PAYLOAD_SCHEMAS, CommandEnvelope, ImportWordPressAssetPayload, CreateNewsPayload, CreateTaxonomyTermPayload, CreateTimedContentPayload, UpdateContentPayload, ArchiveContentPayload, RollbackContentPayload, ScheduleContentPayload, AttachAssetPayload, ReplaceAssetPayload, UpdateSeoPayload, type ReplaceAssetCommand } from './command-schema';
 import { slugify, uuid } from './util';
 import { CommandError } from './core/errors';
 import { resolvePermalink, resolveSeo, resolveTemplate, validateTaxonomyTerms } from './core/resolvers';
@@ -12,54 +12,12 @@ import { fetchGeneratedArtifact, createGeneratedArtifactFetcher, type GeneratedA
 import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
-import { evaluateClaim } from './control-plane/replay';
+import { evaluateClaim, evaluateExistingJob } from './control-plane/replay';
+import { claimCommand, readJob, reopenFailedJob, recordFailure, successStatement, guardedSuccessStatement } from './control-plane/job-store';
 import { SITE_ID, SiteIdentityMismatch, assertCommandTargetsThisSite } from './site-identity';
 import { contractVersion } from './control-plane/contracts';
 import { RULE_VERSION } from './rule-version';
 
-
-async function recordJob(commandId:string, command:string, status:string, error?:unknown) {
-  const e=error as any;
-  const message = error instanceof Error ? error.message : error ? String(error) : null;
-  await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,error_type,error_code,error_message,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,error_type=excluded.error_type,error_code=excluded.error_code,error_message=excluded.error_message,finished_at=excluded.finished_at`).bind(uuid(),commandId,command,status,1,e?.type||null,e?.code||null,message,new Date().toISOString(),new Date().toISOString()).run();
-}
-
-async function storedJob(commandId:string) {
-  return await env.DB.prepare(`SELECT id,status,result_json,command_digest,command_type FROM jobs WHERE command_id=? LIMIT 1`).bind(commandId).first<{id:string;status:string;result_json:string|null;command_digest:string|null;command_type:string|null}>();
-}
-
-/**
- * Bind this commandId to this command, first writer wins.
- *
- * DO NOTHING rather than DO UPDATE: the identity binding of an existing id is
- * never rewritten, so a second, different command cannot take over an id that
- * another command already claimed. The row is then read back and the stored
- * value -- not the submitted one -- decides what happens, which is what makes
- * this safe under concurrent submission of two different commands with the
- * same id.
- */
-async function claimCommand(commandId:string, command:string, digest:string) {
-  const claimId = uuid();
-  const now = new Date().toISOString();
-  await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,command_digest,created_at,started_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO NOTHING`)
-    .bind(claimId,commandId,command,'running',1,digest,now,now).run();
-  return { claimId, stored: await storedJob(commandId) };
-}
-
-/**
- * Re-open a failed job for a retry of the *same* command. Conditioned on the
- * stored digest and on the row still being failed, so it cannot rewrite an
- * identity binding and cannot start a second concurrent execution.
- */
-async function reopenFailedClaim(commandId:string, digest:string) {
-  const now = new Date().toISOString();
-  const outcome = await env.DB.prepare(`UPDATE jobs SET status='running',started_at=?,attempt_count=attempt_count+1 WHERE command_id=? AND command_digest=? AND status='failed'`)
-    .bind(now,commandId,digest).run();
-  const changes = (outcome as { meta?: { changes?: number } }).meta?.changes;
-  if (changes === 0) {
-    throw new CommandError('CONFLICT','COMMAND_IN_PROGRESS','This command was picked up by another run. Wait for it to finish rather than running it a second time.',true,{commandId});
-  }
-}
 
 type ContentRow = { id:string; content_type:'news'|'article'; slug:string; title:string; excerpt:string|null; blocks_json:string; status:string; published_at:string|null; starts_at:string|null; ends_at:string|null; seo_title:string|null; seo_description:string|null; version:number; };
 export type TrustedAuthorization = { actor:string; scopes:string[] };
@@ -77,12 +35,11 @@ function authorize(runtime:CommandRuntime, scope:string) {
   return authorization.actor;
 }
 
-type MutationCommand = 'create_news'|'create_taxonomy_term'|'create_timed_content'|'create_asset'|'import_wordpress_asset'|'update_content'|'archive_content'|'rollback_content'|'schedule_content'|'attach_asset'|'replace_asset'|'update_seo'|'create_product'|'update_product'|'publish_product'|'archive_product'|'replace_product_asset'|'attach_product_asset'|'remove_product_asset'|'reorder_product_assets'|'rollback_product'|'create_page'|'update_page'|'insert_page_section'|'update_page_section'|'remove_page_section'|'reorder_page_sections'|'replace_page_section_asset'|'rollback_page'|'insert_page_section_item'|'update_page_section_item'|'remove_page_section_item'|'reorder_page_section_items'|'replace_page_section_item_asset';
+type MutationCommand = 'create_news'|'create_taxonomy_term'|'create_timed_content'|'import_wordpress_asset'|'update_content'|'archive_content'|'rollback_content'|'schedule_content'|'attach_asset'|'replace_asset'|'update_seo'|'create_product'|'update_product'|'publish_product'|'archive_product'|'replace_product_asset'|'attach_product_asset'|'remove_product_asset'|'reorder_product_assets'|'rollback_product'|'create_page'|'update_page'|'insert_page_section'|'update_page_section'|'remove_page_section'|'reorder_page_sections'|'replace_page_section_asset'|'rollback_page'|'insert_page_section_item'|'update_page_section_item'|'remove_page_section_item'|'reorder_page_section_items'|'replace_page_section_item_asset';
 export const MUTATION_SCOPES: Record<MutationCommand, string | string[]> = {
   create_news: 'content:write',
   create_taxonomy_term: 'taxonomy:write',
   create_timed_content: 'content:write',
-  create_asset: 'asset:write',
   import_wordpress_asset: 'asset:write',
   update_content: 'content:write',
   archive_content: 'content:archive',
@@ -178,7 +135,7 @@ async function commitContentMutation(commandId:string, command:string, row:Conte
   const update = env.DB.prepare(`UPDATE news SET ${setClause} WHERE id=? AND content_type=? AND version=?`).bind(...binds, nextVersion, now, row.id, row.content_type, expectedVersion);
   const revision = env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) SELECT ?,?,?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=?`).bind(uuid(),row.content_type,row.id,action,JSON.stringify(before),JSON.stringify(after),commandId,now,row.id,row.content_type,nextVersion);
   const result = { contentType:row.content_type, contentId:row.id, version:nextVersion, action };
-  const job = env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at) SELECT ?,?,?,?,?,?,?,? FROM news WHERE id=? AND content_type=? AND version=? ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,result_json=excluded.result_json,finished_at=excluded.finished_at`).bind(uuid(),commandId,command,'success',1,JSON.stringify(result),now,now,row.id,row.content_type,nextVersion);
+  const job = guardedSuccessStatement(commandId, command, result, { table: 'news', id: row.id, contentType: row.content_type, version: nextVersion }, now);
   const batch = await env.DB.batch([update,...extraStatements,contentSearchProjection(row.id,row.content_type,now),revision,job] as never[]);
   const changes = (batch[0] as { meta?: { changes?: number } })?.meta?.changes;
   if (changes !== 1) throw new CommandError('CONFLICT','CONTENT_VERSION_CONFLICT','Content changed during the command.',false,{expectedVersion,currentVersion:row.version});
@@ -273,27 +230,27 @@ async function verifyPreflightBinding(command: z.infer<typeof CommandEnvelope>) 
 }
 
 export async function executeCommand(input:unknown, runtime:CommandRuntime = {}) {
-  // Fixed pipeline: envelope -> authorization -> idempotency -> preflight binding
-  // -> rule version -> command schema -> normalize/resolvers -> business rules -> transaction.
-  const cmd = CommandEnvelope.parse(input);
-  // All mutation commands cross the same trusted authorization boundary before
-  // idempotency lookup, payload validation, provider fetch, or storage work.
-  authorizeMutation(runtime, cmd.command);
-  // Idempotency is resolved before the contract gates, not after -- but it is
-  // keyed by the complete command, not by its id. A commandId
-  // that already succeeded identifies a completed mutation, and re-answering it
-  // must not depend on the caller still satisfying gates that describe how a
-  // *new* command is admitted: after the first success the state has moved on,
-  // so a re-sent command's expectedVersion is legitimately stale and its
-  // preflight receipt legitimately spent. Making the replay re-pass them would
-  // leave a dispatch whose response was lost permanently unrecoverable.
+  // Fixed pipeline, in this order and for these reasons:
   //
-  // assertRuleVersion has always sat behind this line for the same reason; the
-  // preflight binding now does too. Authorization stays in front: a caller
-  // without the scope is refused whether or not the command already ran.
-  // This installation's identity, checked before idempotency resolution and
-  // before any mutation. A command addressed to another site is refused however
-  // it arrived, and a replay cannot slip past it.
+  //   envelope -> authorization -> site identity -> digest
+  //     -> read-only idempotency check
+  //     -> admission (rule version, preflight binding, payload schema)
+  //     -> atomic transition to running
+  //     -> handler, with every later failure recorded as terminal
+  //
+  // Nothing before the transition writes to `jobs`. An admission check that
+  // refuses a command must not leave a `running` row behind, because that row
+  // would make every later retry of that immutable command fail as
+  // COMMAND_IN_PROGRESS forever.
+  const cmd = CommandEnvelope.parse(input);
+
+  // Authorization first: a caller without the scope is refused whether or not
+  // the command already ran.
+  authorizeMutation(runtime, cmd.command);
+
+  // This installation's identity, before idempotency resolution and before any
+  // mutation, so a command addressed to another site is refused however it
+  // arrived and a replay cannot slip past it.
   try {
     assertCommandTargetsThisSite(cmd.context.targetSite);
   } catch (error) {
@@ -306,15 +263,38 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
   // The digest of the complete immutable command, with the preflight receipt
   // excluded -- the same canonicalization the preflight receipt attests.
   const digest = await commandDigest(cmd);
-  const { claimId, stored } = await claimCommand(cmd.commandId, cmd.command, digest);
-  const claim = evaluateClaim(cmd.commandId, cmd.command, digest, stored, claimId);
 
-  if (claim.kind === 'replay') return { success:true, commandId:cmd.commandId, idempotent:true, result: claim.result };
-  if (claim.kind === 'retry-after-failure') await reopenFailedClaim(cmd.commandId, digest);
+  // Read-only. A completed command is answered from its recorded result: after
+  // the first success the state has moved on, so a re-sent command's
+  // expectedVersion is legitimately stale and its preflight receipt legitimately
+  // spent, and requiring it to re-pass admission would strand a dispatch whose
+  // response was merely lost.
+  const existing = evaluateExistingJob(cmd.commandId, cmd.command, digest, await readJob(cmd.commandId));
+  if (existing.kind === 'replay') {
+    return { success:true, commandId:cmd.commandId, idempotent:true, result: existing.result };
+  }
 
+  // Admission. All non-mutating, all before anything is claimed.
   await verifyPreflightBinding(cmd);
   assertRuleVersion(cmd.context.ruleVersion);
+  const payloadSchema = COMMAND_PAYLOAD_SCHEMAS[cmd.command as keyof typeof COMMAND_PAYLOAD_SCHEMAS];
+  if (!payloadSchema) throw new CommandError('FATAL_SYSTEM_ERROR','COMMAND_NOT_IMPLEMENTED',`Command not implemented: ${cmd.command}`);
+  payloadSchema.parse(cmd.payload);
 
+  // Transition to running, atomically.
+  if (existing.kind === 'proceed-after-failure') {
+    await reopenFailedJob(cmd.commandId, digest);
+  } else {
+    const { claimId, stored } = await claimCommand(cmd.commandId, cmd.command, digest);
+    // Another submission may have claimed the id between the read above and
+    // this insert. The stored row decides, so a loser is refused rather than
+    // executing alongside the winner.
+    const claim = evaluateClaim(cmd.commandId, cmd.command, digest, stored, claimId);
+    if (claim.kind === 'replay') return { success:true, commandId:cmd.commandId, idempotent:true, result: claim.result };
+    if (claim.kind === 'retry-after-failure') await reopenFailedJob(cmd.commandId, digest);
+  }
+
+  // From here the job is `running`, so every exit must be terminal.
   try {
     if (cmd.command === 'create_taxonomy_term') {
       const p = CreateTaxonomyTermPayload.parse(cmd.payload);
@@ -409,25 +389,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           reused: true
         };
 
-        await env.DB.prepare(
-          `INSERT INTO jobs
-           (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at)
-           VALUES (?,?,?,?,?,?,?,?)
-           ON CONFLICT(command_id)
-           DO UPDATE SET
-             status=excluded.status,
-             result_json=excluded.result_json,
-             finished_at=excluded.finished_at`
-        ).bind(
-          uuid(),
-          cmd.commandId,
-          cmd.command,
-          'success',
-          1,
-          JSON.stringify(result),
-          now,
-          now
-        ).run();
+        await successStatement(cmd.commandId, cmd.command, result, now).run();
 
         return {
           success: true,
@@ -497,20 +459,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           now
         ),
 
-        env.DB.prepare(
-          `INSERT INTO jobs
-           (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at)
-           VALUES (?,?,?,?,?,?,?,?)`
-        ).bind(
-          uuid(),
-          cmd.commandId,
-          cmd.command,
-          'success',
-          1,
-          JSON.stringify(result),
-          now,
-          now
-        )
+        successStatement(cmd.commandId, cmd.command, result, now),
       ]);
 
       return {
@@ -536,7 +485,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
         contentSearchProjection(id,p.contentType,now),
         ...[...p.categoryTermIds,...p.tagTermIds].map(termId=>env.DB.prepare(`INSERT INTO content_term_links (content_type,content_id,term_id) VALUES (?,?,?)`).bind(p.contentType,id,termId)),
         env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),p.contentType,id,'create',null,JSON.stringify({...p,id,slug,status,url,templateProfile,seo,taxonomyTermIds:[...p.categoryTermIds,...p.tagTermIds],assetAssociations:[]}),cmd.commandId,now),
-        env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,result_json=excluded.result_json,finished_at=excluded.finished_at`).bind(uuid(),cmd.commandId,cmd.command,'success',1,JSON.stringify(result),now,now)
+        successStatement(cmd.commandId, cmd.command, result, now)
       ];
       await env.DB.batch(statements);
       return {success:true,commandId:cmd.commandId,result};
@@ -656,7 +605,7 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       await env.DB.batch([
         env.DB.prepare(`INSERT INTO timed_contents (id,type,placement,title,body,link_label,link_url,starts_at,ends_at,priority,status,dismissible,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,p.type,p.placement,p.title||null,p.body||null,p.linkLabel||null,p.linkUrl||null,p.startsAt,p.endsAt||null,p.priority,status,p.dismissible?1:0,1,now,now),
         env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),'timed_content',id,'create',null,JSON.stringify({...p,id,status}),cmd.commandId,now),
-        env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,result_json=excluded.result_json,finished_at=excluded.finished_at`).bind(uuid(),cmd.commandId,cmd.command,'success',1,JSON.stringify(result),now,now)
+        successStatement(cmd.commandId, cmd.command, result, now)
       ]);
       return {success:true,commandId:cmd.commandId,result};
     }
@@ -705,15 +654,10 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       };
     }
 
-    if (cmd.command === 'create_asset') {
-      const p=CreateAssetPayload.parse(cmd.payload);
-      const result=await ingestAsset(p.descriptor,p.transfer,cmd.commandId);
-      return {success:true,commandId:cmd.commandId,result};
-    }
-
     throw new CommandError('FATAL_SYSTEM_ERROR','COMMAND_NOT_IMPLEMENTED',`Command not implemented: ${cmd.command}`);
   } catch (e) {
-    await recordJob(cmd.commandId,cmd.command,'failed',e);
+    // The job is running; it must not stay that way.
+    await recordFailure(cmd.commandId, cmd.command, e);
     throw e;
   }
 }

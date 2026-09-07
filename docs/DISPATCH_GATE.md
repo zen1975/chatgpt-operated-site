@@ -70,7 +70,6 @@ validated payload:
 
 | Command | Intake source | Provider from |
 | --- | --- | --- |
-| `create_asset` | always | `payload.descriptor.sourceProvider` |
 | `import_wordpress_asset` | always | the command itself (`wordpress`) |
 | `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset` | only when `payload.reference` is present | `payload.reference.provider` |
 
@@ -105,6 +104,36 @@ so attaching the receipt cannot change the digest it attests.
 
 Some commands — currently `import_wordpress_asset` — are refused by the Worker
 outright without a receipt (`COMMAND_PREFLIGHT_REQUIRED`).
+
+## Asset intake is a reference, never bytes
+
+An externally dispatched command carries a **bounded provider reference or a
+canonical asset id**. It never carries image bytes. `AssetIntakeDescriptor` puts
+it plainly in the Core boundary: *"Binary transfer is intentionally not part of
+this descriptor... GitHub command JSON must never become a routine binary
+transport."*
+
+The supported public intake paths are therefore:
+
+| Command | Carries |
+| --- | --- |
+| `replace_asset`, `attach_product_asset`, `replace_product_asset`, `replace_page_section_asset` | `payload.reference` — a provider plus a provider asset id — or a canonical `assetId` already in the Asset Engine |
+| `import_wordpress_asset` | a WordPress media reference (source URL and id) |
+
+In each case the Worker resolves the reference and fetches the bytes itself,
+inside the intake layer, where readiness and credentials live.
+
+`create_asset` used to be advertised in the envelope enum, but its payload
+required an in-memory `Uint8Array`. JSON can neither construct nor preserve
+that, so no operator could ever have sent one: it was an advertised command with
+no reachable caller. It has been removed from the envelope, the payload schema
+map, the authorization scopes, the Worker branch and the published schema. The
+intake descriptor is still published — adapters and installers consume it — but
+as intake-layer documentation, not a command payload.
+
+The command matrix test enforces this: every advertised command must survive a
+JSON round trip, so a payload that cannot be expressed in JSON fails the build
+rather than shipping as a contract nobody can use.
 
 ## Recovering a lost dispatch response
 
@@ -143,8 +172,30 @@ rewritten:
 - the claim is an insert with **conflict-ignore** semantics; the row is then
   read back and the **stored** value decides what happens
 - success and failure recording update status and result fields only. No write
-  path may touch `command_digest` or `command_type` -- a contract test enforces
-  that against the source
+  path may touch `command_digest` or `command_type`
+- **every** write to `jobs` goes through `src/server/control-plane/job-store.ts`.
+  A handler that writes its own row either collides with the claim or rebinds
+  the id, and both happened before the store existed; a contract test fails the
+  build if any handler writes to `jobs` directly
+
+### The claim lifecycle
+
+Nothing writes to `jobs` until the command has passed every check that could
+refuse it. Ordering is the guarantee, and it is asserted by a test:
+
+```text
+envelope -> authorization -> site identity -> digest
+  -> read-only idempotency check      (may answer a completed replay)
+  -> admission: preflight binding, rule version, payload schema
+  -> atomic transition to running     (claim, or failed -> running)
+  -> handler                          (every exception recorded as failed)
+```
+
+An admission check that refuses a command must not leave a `running` row: that
+row would make every later retry of that immutable command fail as
+`COMMAND_IN_PROGRESS` forever. Once `running` is established, every exit is
+terminal — success or failed — so the only `running` row is an execution
+actually in flight.
 
 | Stored row | Submitted command | Outcome |
 | --- | --- | --- |
