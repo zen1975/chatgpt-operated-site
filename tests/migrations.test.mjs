@@ -56,12 +56,12 @@ test('migrations are append-only: no destructive statements', async () => {
   }
 });
 
-// Rejecting destructive statements is not immutability. A migration edited with
-// entirely non-destructive SQL -- a column added to 0001 rather than a new 0006
-// -- passes every other check here, yet existing installations have already run
-// that file and will never re-run it, so they diverge permanently from a
-// database built fresh. The committed digests make such an edit impossible to
-// land silently.
+// Layer 1 of two. This pins migration content *within* a distribution and needs
+// no git, so it also runs inside the Docker image. It deliberately does not
+// enforce immutability on its own: a contributor can edit an applied migration,
+// regenerate the manifest, and pass here. Base-relative immutability is
+// enforced separately in pull-request CI by
+// scripts/check-migration-immutability.mjs, which cannot run without git.
 test('the migration checksum manifest matches the committed migrations', async () => {
   const committed = await readFile(path.join(repoRoot, MANIFEST_PATH), 'utf8');
   assert.equal(
