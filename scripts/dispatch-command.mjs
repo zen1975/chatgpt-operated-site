@@ -47,11 +47,57 @@
 // document is echoed as the operation record; it must never carry credentials.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { repoRoot } from './repo-root.mjs';
-import { loadCommandContracts, loadRuleVersion } from './load-command-contracts.mjs';
+import { loadCommandContracts, loadRuleVersion, loadServerModule } from './load-command-contracts.mjs';
+
+const loadDigest = () => loadServerModule('src/server/control-plane/digest.ts');
+
+/**
+ * The minimum that must hold before the installation can be asked whether this
+ * command already ran: an addressable commandId and the right installation.
+ *
+ * Deliberately not the full schema. A command whose dispatch response was lost
+ * is immutable -- it cannot be reissued under a newer rule version without
+ * becoming a different command -- so validating it against the *current*
+ * admission rules before discovering it already succeeded would strand it
+ * exactly as the stale expectedVersion did. Admission rules judge new work.
+ */
+export async function validateForLookup(command) {
+  const contracts = await loadCommandContracts();
+
+  if (!command || typeof command !== 'object' || Array.isArray(command)) {
+    throw new DispatchError('schema', 'COMMAND_NOT_AN_OBJECT', 'The command must be a JSON object.');
+  }
+
+  const commandId = contracts.CommandId.safeParse(command.commandId);
+  if (!commandId.success) {
+    throw new DispatchError('schema', 'COMMAND_ID_INVALID', 'commandId is missing or not a valid identifier, so this command cannot be addressed.', commandId.error.issues);
+  }
+
+  const siteId = await installationSiteId();
+  const targetSite = command?.context?.targetSite;
+  if (!targetSite) {
+    throw new DispatchError('target-site', 'TARGET_SITE_REQUIRED', `The command does not name a target site. This installation is "${siteId}"; set context.targetSite to it.`);
+  }
+  if (targetSite !== siteId) {
+    throw new DispatchError('target-site', 'TARGET_SITE_MISMATCH', `The command targets "${targetSite}" but this installation is "${siteId}". Refusing to mutate a site the command was not written for.`, { targetSite, installation: siteId });
+  }
+
+  return { commandId: commandId.data, siteId };
+}
+
+/** The canonical digest, from the same implementation the Worker uses. */
+export async function canonicalCommandDigest(command) {
+  const { commandDigest } = await loadDigest();
+  try {
+    return await commandDigest(command);
+  } catch (error) {
+    throw new DispatchError('schema', 'COMMAND_NOT_CANONICALIZABLE', `The command cannot be canonicalized, so it cannot be matched against a stored job: ${error.message}`);
+  }
+}
 
 /** The canonical identity of this installation. */
 async function installationSiteId() {
@@ -154,72 +200,88 @@ export function assertSingleSource({ commandFile, commandJson }) {
 }
 
 /**
- * Resolve --command-file to a committed file inside this repository, before it
- * is opened.
+ * Resolve --command-file to a committed blob, and return that blob's bytes.
  *
- * A command file names an operation that will mutate a customer site, so the
- * path is part of the trust boundary: an absolute path, a `..` traversal, or a
- * symlink pointing outward would let the gate read -- and, once echoed as the
- * operation record, publish -- a file that is not part of the distribution.
- * Containment is checked on the *real* path, so a symlink cannot escape by
- * looking innocent.
+ * The working tree is never read. "Tracked" is not the same as "unmodified":
+ * `git ls-files --error-unmatch` only asks whether a path is in the index, so a
+ * committed command file edited locally would still have been dispatched --
+ * and, since the gate echoes the command as the operation record, printed.
+ * Reading `HEAD:<path>` instead means the bytes dispatched are exactly the
+ * bytes the repository carries.
+ *
+ * It also removes a whole class of path attack: a blob inside the HEAD tree
+ * cannot be an absolute path, a traversal, or a symlink target outside the
+ * repository, because it is not a filesystem lookup at all. The string checks
+ * remain so those inputs are refused with a precise reason.
+ *
+ * Arguments are passed as an argv array with `--` before the path, never
+ * through a shell.
  */
 export async function resolveCommandFile(commandFile, { cwd = repoRoot, gitImpl = run } = {}) {
   if (path.isAbsolute(commandFile)) {
     throw new DispatchError('command-source', 'COMMAND_FILE_ABSOLUTE', 'command_file must be a repository-relative path, not an absolute path.');
   }
-  if (commandFile.split(/[\\/]/).includes('..')) {
+  const segments = commandFile.split(/[\\/]/);
+  if (segments.includes('..')) {
     throw new DispatchError('command-source', 'COMMAND_FILE_TRAVERSAL', 'command_file must not traverse out of the repository with "..".');
   }
 
-  const candidate = path.resolve(cwd, commandFile);
-  let real;
+  const relative = segments.filter((segment) => segment && segment !== '.').join('/');
+  if (!relative) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_A_FILE', 'command_file must name a file.');
+  }
+
+  let entry;
   try {
-    real = await realpath(candidate);
-  } catch {
-    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_FOUND', `command_file does not exist: ${commandFile}`);
-  }
-
-  // Compare real paths so a symlink inside the repository pointing outside it
-  // is caught here rather than after being read.
-  const realRoot = await realpath(cwd);
-  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
-    throw new DispatchError('command-source', 'COMMAND_FILE_OUTSIDE_REPOSITORY', 'command_file resolves outside the repository. Refusing to read it.');
-  }
-
-  const info = await stat(real);
-  if (!info.isFile()) {
-    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_A_FILE', 'command_file must be a regular file.');
-  }
-
-  const relative = path.relative(realRoot, real).split(path.sep).join('/');
-
-  // A dispatched command is an immutable record, so it must be one the
-  // repository actually carries -- not a file dropped into the working tree.
-  // Unverifiable is treated as untracked: fail closed.
-  try {
-    const { stdout } = await gitImpl('git', ['ls-files', '--error-unmatch', '--', relative], { cwd: realRoot });
-    if (!stdout.trim()) throw new Error('not tracked');
-  } catch {
+    const { stdout } = await gitImpl('git', ['ls-tree', '-z', 'HEAD', '--', relative], { cwd });
+    entry = stdout.split('\0').filter(Boolean)[0];
+  } catch (error) {
     throw new DispatchError(
       'command-source',
       'COMMAND_FILE_NOT_TRACKED',
-      `command_file is not a committed file in this repository: ${relative}. A dispatched command must be part of the repository, and this check cannot be skipped when git is unavailable.`
+      `command_file could not be read from the committed tree: ${relative}. A dispatched command must be a committed file, and this check cannot be skipped when git is unavailable.`
     );
   }
 
-  return { absolutePath: real, relativePath: relative };
+  if (!entry) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_TRACKED', `command_file is not a committed file in this repository: ${relative}.`);
+  }
+
+  // "<mode> <type> <sha>\t<path>"
+  const match = entry.match(/^(\d{6}) (\w+) ([0-9a-f]{40,64})\t/);
+  if (!match) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_TRACKED', `Could not interpret the committed tree entry for ${relative}.`);
+  }
+  const [, mode, type, sha] = match;
+
+  if (type === 'tree' || mode === '040000') {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_A_FILE', 'command_file must be a regular file, not a directory.');
+  }
+  if (mode === '120000') {
+    throw new DispatchError('command-source', 'COMMAND_FILE_SYMLINK', 'command_file is a symlink in the committed tree. Refusing to follow it: name the file itself.');
+  }
+  if (mode === '160000') {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_A_FILE', 'command_file points at a submodule.');
+  }
+  if (type !== 'blob' || (mode !== '100644' && mode !== '100755')) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_NOT_A_FILE', `command_file is not a regular committed blob (mode ${mode}, type ${type}).`);
+  }
+
+  let contents;
+  try {
+    const { stdout } = await gitImpl('git', ['cat-file', 'blob', sha], { cwd, maxBuffer: 8 * 1024 * 1024 });
+    contents = stdout;
+  } catch (error) {
+    throw new DispatchError('command-source', 'COMMAND_FILE_UNREADABLE', `The committed blob for ${relative} could not be read.`);
+  }
+
+  return { relativePath: relative, blobSha: sha, contents };
 }
 
 async function readCommand(options) {
   assertSingleSource(options);
-  let raw;
-  if (options.commandFile) {
-    const resolved = await resolveCommandFile(options.commandFile);
-    raw = await readFile(resolved.absolutePath, 'utf8');
-  } else {
-    raw = options.commandJson;
-  }
+  // The committed bytes, never the working tree.
+  const raw = options.commandFile ? (await resolveCommandFile(options.commandFile)).contents : options.commandJson;
   try {
     return JSON.parse(raw);
   } catch (error) {
@@ -410,10 +472,53 @@ export async function runDispatch(options, io = {}) {
   const fetchImpl = io.fetchImpl || fetch;
   const command = options.command ?? (await readCommand(options));
 
-  // Nothing about the command is echoed until it has parsed as JSON and passed
-  // the schema. The operation record is printed below, from the validated
-  // value, so an unvalidated file can never be published through this log.
-  const { command: validated, siteId, intake } = await validateCommand(command);
+  // Step 1: only what is needed to address this command safely. Nothing is
+  // echoed yet -- the operation record is written from a validated value.
+  const { commandId, siteId } = await validateForLookup(command);
+  const digest = await canonicalCommandDigest(command);
+
+  const endpoint = (options.endpoint ?? requireEnv('SITE_COMMAND_ENDPOINT')).replace(/\/+$/, '');
+  const controlSecret = options.controlSecret ?? requireEnv('CONTROL_READ_HMAC_SECRET');
+
+  // Step 2: is this a completed command being re-answered, or new work?
+  const prior = await lookupCommand({ commandId, endpoint, controlSecret, fetchImpl });
+
+  if (prior.known && prior.status === 'success') {
+    // Idempotency is bound to the complete immutable command. An id that
+    // succeeded for a *different* command is reuse, not a replay: answering it
+    // from the stored result would silently skip the mutation just requested.
+    if (!prior.commandDigest) {
+      throw new DispatchError('idempotency', 'COMMAND_DIGEST_UNVERIFIABLE', `${commandId} already succeeded, but the stored job predates command digests, so it cannot be confirmed to be this command. Issue a new commandId.`);
+    }
+    if (prior.commandDigest !== digest) {
+      throw new DispatchError('idempotency', 'COMMAND_ID_REUSED', `${commandId} already succeeded for a different command. A commandId identifies one immutable command and cannot be reused; issue a new commandId.`, { storedDigest: prior.commandDigest, submittedDigest: digest });
+    }
+
+    log(`command      ${command.command}`);
+    log(`commandId    ${commandId}`);
+    log(`\nreplay       already succeeded at ${prior.finishedAt ?? 'an earlier run'}; digest matches.`);
+    log('             Re-sending so the Worker returns the recorded result. No new mutation.');
+
+    if (options.dryRun) {
+      log('\ndry run: nothing was dispatched. The recorded result is shown above.');
+      return { dispatched: false, replay: true, commandId, digest, priorResult: prior.result };
+    }
+
+    const commandSecret = options.commandSecret ?? requireEnv('COMMAND_HMAC_SECRET');
+    const result = await dispatchToWorker({ command, endpoint, commandSecret, fetchImpl });
+    if (!result.idempotent) {
+      throw new DispatchError('idempotency', 'REPLAY_NOT_IDEMPOTENT', `${commandId} was recorded as successful, but the Worker did not answer the replay idempotently. Stopping rather than risking a second mutation.`);
+    }
+    log('\nrecovered    original result returned; mutation ran once.');
+    return { dispatched: true, replay: true, idempotent: true, commandId, digest, result, priorResult: prior.result };
+  }
+
+  if (prior.known && prior.status !== 'success') {
+    log(`             a previous attempt for this commandId ended "${prior.status}"; running the full gates.`);
+  }
+
+  // Step 3: new work. Everything an incoming command must satisfy today.
+  const { command: validated, intake } = await validateCommand(command);
 
   log('--- validated command ---');
   log(JSON.stringify(validated, null, 2));
@@ -424,43 +529,9 @@ export async function runDispatch(options, io = {}) {
   log('gate 2/5     rule version   OK');
   log(`gate 3/5     target site    OK (${siteId})`);
 
-  const endpoint = (options.endpoint ?? requireEnv('SITE_COMMAND_ENDPOINT')).replace(/\/+$/, '');
-  const controlSecret = options.controlSecret ?? requireEnv('CONTROL_READ_HMAC_SECRET');
-
-  // Before any state gate: a command that already succeeded is a completed
-  // mutation being re-answered, not new work. Its expectedVersion is
-  // legitimately stale now, so running preflight against it would report a
-  // conflict and strand a dispatch whose response was merely lost.
-  const prior = await lookupCommand({ commandId: validated.commandId, endpoint, controlSecret, fetchImpl });
-
-  if (prior.known && prior.status === 'success') {
-    log(`\nreplay       ${validated.commandId} already succeeded at ${prior.finishedAt ?? 'an earlier run'}.`);
-    log('             Re-sending so the Worker returns the recorded result. No new mutation.');
-
-    if (options.dryRun) {
-      log('\ndry run: nothing was dispatched. The recorded result is shown above.');
-      return { dispatched: false, replay: true, command: validated, priorResult: prior.result };
-    }
-
-    const commandSecret = options.commandSecret ?? requireEnv('COMMAND_HMAC_SECRET');
-    // The Worker resolves idempotency by commandId before any contract gate, so
-    // this returns the original result rather than mutating a second time.
-    const result = await dispatchToWorker({ command: validated, endpoint, commandSecret, fetchImpl });
-    if (!result.idempotent) {
-      throw new DispatchError('idempotency', 'REPLAY_NOT_IDEMPOTENT', `${validated.commandId} was recorded as successful, but the Worker did not answer the replay idempotently. Stopping rather than risking a second mutation.`);
-    }
-    log('\nrecovered    original result returned; mutation ran once.');
-    return { dispatched: true, replay: true, idempotent: true, command: validated, result, priorResult: prior.result };
-  }
-
-  if (prior.known && prior.status !== 'success') {
-    log(`             previous attempt for this commandId ended "${prior.status}"; re-running the gates.`);
-  }
-
   if (intake.required) {
-    const readiness = await checkAssetIntakeReadiness({ provider: intake.provider, endpoint, controlSecret, fetchImpl });
+    await checkAssetIntakeReadiness({ provider: intake.provider, endpoint, controlSecret, fetchImpl });
     log(`gate 4/5     asset intake   READY (${intake.provider})`);
-    void readiness;
   } else {
     log('gate 4/5     asset intake   not required by this command');
   }
@@ -472,13 +543,13 @@ export async function runDispatch(options, io = {}) {
 
   if (options.dryRun) {
     log('\ndry run: all gates passed; nothing was dispatched.');
-    return { dispatched: false, replay: false, command: bound, receipt };
+    return { dispatched: false, replay: false, command: bound, digest, receipt };
   }
 
   const commandSecret = options.commandSecret ?? requireEnv('COMMAND_HMAC_SECRET');
   const result = await dispatchToWorker({ command: bound, endpoint, commandSecret, fetchImpl });
   log(`\ndispatched   ${result.idempotent ? 'already applied (idempotent replay)' : 'applied'}`);
-  return { dispatched: true, replay: false, command: bound, receipt, result };
+  return { dispatched: true, replay: false, command: bound, digest, receipt, result };
 }
 
 export { DispatchError, hmacHex, timingSafeEqual };

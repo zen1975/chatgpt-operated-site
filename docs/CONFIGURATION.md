@@ -101,7 +101,7 @@ non-example file; keep the example as the documented default.
 | `/api/internal/commands` | `COMMAND_HMAC_SECRET`, 5-minute signature window | GitHub Actions dispatch |
 | `/api/v1/commands` | `COMMAND_HMAC_SECRET`, 5-minute signature window | Authenticated command clients using the REST envelope |
 | `/api/emergency/news` | `EMERGENCY_NEWS_HMAC_SECRET`, 5-minute signature window | Out-of-band emergency publication |
-| `/api/control/*` | `CONTROL_READ_HMAC_SECRET`, 5-minute signature window | Read-only state, contract discovery, and command status (`/api/control/commands/{commandId}`) |
+| `/api/control/*` | `CONTROL_READ_HMAC_SECRET`, 5-minute signature window | Read-only state, contract discovery, and command status with its recorded digest (`/api/control/commands/{commandId}`) |
 
 The dispatch gate (`docs/DISPATCH_GATE.md`) is the supported caller of
 `/api/control/preflight` and `/api/internal/commands`. It needs its own
