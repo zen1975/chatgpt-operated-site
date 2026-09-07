@@ -13,8 +13,8 @@ import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
 import { contractVersion } from './control-plane/contracts';
+import { RULE_VERSION } from './rule-version';
 
-const RULE_VERSION='0.1.0';
 
 async function recordJob(commandId:string, command:string, status:string, error?:unknown) {
   const e=error as any;

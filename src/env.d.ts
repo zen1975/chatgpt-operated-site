@@ -3,11 +3,17 @@
 
 declare module 'cloudflare:workers' {
   export const env: {
+    // Bindings declared in wrangler.jsonc.
     DB: D1Database;
     ASSETS_BUCKET: R2Bucket;
-    COMMAND_HMAC_SECRET: string;
+    SESSION: KVNamespace;
     SITE_ORIGIN: string;
     SITE_TIMEZONE: string;
+    // Secrets. Provision with `wrangler secret put`; never commit values.
+    COMMAND_HMAC_SECRET: string;
+    CONTROL_READ_HMAC_SECRET?: string;
+    EMERGENCY_NEWS_HMAC_SECRET?: string;
+    CONTROL_READ_SCOPES?: string;
     GOOGLE_DRIVE_ACCESS_TOKEN?: string;
     GOOGLE_DRIVE_REFRESH_TOKEN?: string;
     GOOGLE_DRIVE_CLIENT_ID?: string;
