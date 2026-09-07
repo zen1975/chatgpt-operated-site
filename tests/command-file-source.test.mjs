@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, writeFile, mkdir, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, symlink, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { repoRoot } from '../scripts/repo-root.mjs';
+
+const SITE_ID = JSON.parse(await readFile(path.join(repoRoot, 'config/site-profile.json'), 'utf8')).site.id;
 import { resolveCommandFile, runDispatch, DispatchError } from '../scripts/dispatch-command.mjs';
 
 const run = promisify(execFile);
@@ -170,8 +172,8 @@ test('a validated command is printed as the operation record', withGit, async ()
       log: (line) => printed.push(String(line)),
       fetchImpl: async (url) => {
         const pathname = new URL(url).pathname;
-        if (pathname.startsWith('/api/control/commands/')) return { ok: true, status: 200, json: async () => ({ success: true, known: false, status: null }) };
-        if (pathname === '/api/control/preflight/') return { ok: true, status: 200, json: async () => ({ success: true, preflight: { commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', sideEffects: false } }) };
+        if (pathname.startsWith('/api/control/commands/')) return { ok: true, status: 200, json: async () => ({ success: true, siteId: SITE_ID, known: false, status: null }) };
+        if (pathname === '/api/control/preflight/') return { ok: true, status: 200, json: async () => ({ success: true, siteId: SITE_ID, preflight: { commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', sideEffects: false } }) };
         throw new Error(`unexpected ${pathname}`);
       }
     }
@@ -207,8 +209,8 @@ test('a locally modified tracked file dispatches the committed blob', withGit, a
         log: (line) => printed.push(String(line)),
         fetchImpl: async (url, init) => {
           const pathname = new URL(url).pathname;
-          if (pathname.startsWith('/api/control/commands/')) return { ok: true, status: 200, json: async () => ({ success: true, known: false, status: null }) };
-          if (pathname === '/api/control/preflight/') return { ok: true, status: 200, json: async () => ({ success: true, preflight: { commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', sideEffects: false } }) };
+          if (pathname.startsWith('/api/control/commands/')) return { ok: true, status: 200, json: async () => ({ success: true, siteId: SITE_ID, known: false, status: null }) };
+          if (pathname === '/api/control/preflight/') return { ok: true, status: 200, json: async () => ({ success: true, siteId: SITE_ID, preflight: { commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', sideEffects: false } }) };
           if (pathname === '/api/internal/commands') {
             dispatched.push(init.body);
             return { ok: true, status: 200, json: async () => ({ success: true, idempotent: false, result: {} }) };

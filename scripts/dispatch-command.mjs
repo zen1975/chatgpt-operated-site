@@ -391,7 +391,7 @@ export async function checkAssetIntakeReadiness({ provider, endpoint, controlSec
 }
 
 /** Gate 3. Read-only; the Worker reports sideEffects:false. */
-export async function preflightCommand({ command, endpoint, controlSecret, fetchImpl = fetch }) {
+export async function preflightCommand({ command, endpoint, controlSecret, fetchImpl = fetch, ...options }) {
   const pathname = '/api/control/preflight/';
   const { url, init } = signedControlRequest(endpoint, pathname, 'POST', controlSecret);
   const response = await fetchImpl(url, { ...init, body: JSON.stringify(command) });
@@ -399,6 +399,9 @@ export async function preflightCommand({ command, endpoint, controlSecret, fetch
 
   if (!response.ok || !body?.success) {
     throw new DispatchError('preflight', body?.error?.code || 'PREFLIGHT_FAILED', body?.error?.message || `Preflight failed (HTTP ${response.status}).`, body?.error?.details);
+  }
+  if (options?.expectSiteIdentity) {
+    assertRemoteIdentity({ attested: body.siteId, ...options.expectSiteIdentity, source: 'preflight' });
   }
   const receipt = body.preflight;
   if (!receipt?.commandDigest || !receipt?.contractVersion) {
@@ -448,6 +451,35 @@ export async function lookupCommand({ commandId, endpoint, controlSecret, fetchI
   return body;
 }
 
+/**
+ * Confirm the endpoint actually is the installation this command is for.
+ *
+ * Authentication proves the caller holds the configured secret; it does not
+ * prove the configuration points at the right site. An environment copied
+ * between installations -- endpoint and secrets belonging to site B while the
+ * repository and the command name site A -- authenticates perfectly and would
+ * otherwise mutate the wrong customer. The remote attests its own identity and
+ * it must agree with *both* the command's target and this repository's
+ * configuration.
+ */
+export function assertRemoteIdentity({ attested, targetSite, localSiteId, source }) {
+  if (!attested) {
+    throw new DispatchError(
+      'remote-identity',
+      'REMOTE_SITE_IDENTITY_MISSING',
+      `The ${source} response did not attest a site identity, so the endpoint cannot be confirmed to be "${localSiteId}". Refusing to dispatch.`
+    );
+  }
+  if (attested !== localSiteId || attested !== targetSite) {
+    throw new DispatchError(
+      'remote-identity',
+      'REMOTE_SITE_IDENTITY_MISMATCH',
+      `The endpoint identifies itself as "${attested}", but this repository is configured for "${localSiteId}" and the command targets "${targetSite}". The endpoint or its secrets belong to a different installation. Refusing to dispatch.`,
+      { attested, localSiteId, targetSite, source }
+    );
+  }
+}
+
 export async function dispatchToWorker({ command, endpoint, commandSecret, fetchImpl = fetch }) {
   const body = JSON.stringify(command);
   const timestamp = new Date().toISOString();
@@ -482,6 +514,11 @@ export async function runDispatch(options, io = {}) {
 
   // Step 2: is this a completed command being re-answered, or new work?
   const prior = await lookupCommand({ commandId, endpoint, controlSecret, fetchImpl });
+
+  // ...and is this endpoint even the installation the command is for? Checked
+  // on the first authenticated response, so nothing -- replay included --
+  // reaches /api/internal/commands against the wrong site.
+  assertRemoteIdentity({ attested: prior.siteId, targetSite: command.context.targetSite, localSiteId: siteId, source: 'command lookup' });
 
   if (prior.known && prior.status === 'success') {
     // Idempotency is bound to the complete immutable command. An id that
@@ -536,7 +573,13 @@ export async function runDispatch(options, io = {}) {
     log('gate 4/5     asset intake   not required by this command');
   }
 
-  const receipt = await preflightCommand({ command: validated, endpoint, controlSecret, fetchImpl });
+  const receipt = await preflightCommand({
+    command: validated,
+    endpoint,
+    controlSecret,
+    fetchImpl,
+    expectSiteIdentity: { targetSite: validated.context.targetSite, localSiteId: siteId }
+  });
   log(`gate 5/5     preflight      OK (${receipt.commandDigest})`);
 
   const bound = bindPreflightReceipt(validated, receipt);

@@ -99,6 +99,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'scripts/dispatch-command.mjs',
   'src/pages/api/control/commands/[commandId].ts',
   'src/server/control-plane/replay.ts',
+  'src/server/site-identity.ts',
   'src/server/command-schema.ts',
   'src/server/commands.ts',
   'tsconfig.json',
