@@ -91,6 +91,14 @@ Client
 
 **ChatGPT is the interface. Everything else is infrastructure.**
 
+## What this repository promises
+
+This repository is a **reference implementation and construction baseline** for implementers. It is intended to give an agency or developer enough working code, schemas, examples, configuration, and documentation to build their own client installation from it.
+
+The baseline is considered useful when a clean clone can install, `npm run verify` is green, the included examples match the current schemas, and the extension points are understandable from the repository itself.
+
+It is **not** intended to be a hosted service, a finished client website, or a promise that every downstream Cloudflare/Google/GitHub account is already provisioned. Real client provisioning and end-to-end acceptance belong to the implementer's installation and handoff process.
+
 ## Documentation
 
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
@@ -103,13 +111,9 @@ Client
 
 ## Project status
 
-This repository is currently a **private OSS candidate** assembled from a reviewed clean extraction of the private production/development upstream. It is not ready for public release yet.
+The **implementer baseline is assembled and continuously verified**. Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
 
-Before public release it will be validated through clean installation, build and contract checks, disposable provisioning, and an actual ChatGPT-operated end-to-end site workflow including image handling.
-
-Clean installation, build, and contract checks now run on every push and pull
-request. Disposable provisioning and the end-to-end ChatGPT-operated workflow
-are still outstanding.
+The repository remains private until the owner chooses to publish it. Making it public does not require proving every possible client deployment first; each real installation should still complete its own provisioning and end-to-end acceptance before client handoff.
 
 ## Licence
 
