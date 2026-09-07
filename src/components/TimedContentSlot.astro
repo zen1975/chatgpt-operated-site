@@ -1,0 +1,20 @@
+---
+import { getActiveTimedContent } from '@/lib/content';
+interface Props { placement: string; }
+const { placement } = Astro.props;
+const item = await getActiveTimedContent(placement);
+---
+{item && (
+  <aside class="notice" data-ends-at={item.ends_at ?? undefined}>
+    {item.title && <strong>{item.title}</strong>}
+    {item.body && <span> {item.body}</span>}
+    {item.link_url && <a href={item.link_url}> {item.link_label || '詳しく見る'}</a>}
+  </aside>
+)}
+{item?.ends_at && (
+<script is:inline define:vars={{ endsAt: item.ends_at }}>
+  const end = Date.parse(endsAt);
+  const delay = end - Date.now();
+  if (delay > 0 && delay < 2147483647) setTimeout(() => location.reload(), delay + 50);
+</script>
+)}

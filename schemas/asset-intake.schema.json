@@ -1,0 +1,30 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["sourceProvider","sourceId","originalFilename","mimeType","bytes"],
+  "properties":{
+    "sourceProvider":{"enum":["generated","google_drive","wordpress","remote_url","upload","legacy"]},
+    "sourceId":{"type":"string","minLength":1,"maxLength":512},
+    "originalFilename":{"type":"string","minLength":1,"maxLength":255},
+    "mimeType":{"enum":["image/jpeg","image/png","image/webp","image/avif","application/pdf"]},
+    "bytes":{"type":"integer","minimum":1},
+    "width":{"type":["integer","null"],"minimum":1},
+    "height":{"type":["integer","null"],"minimum":1},
+    "expectedSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "sourceMetadata":{"type":"object","additionalProperties":{"type":["string","number","boolean","null"]}},
+    "alt":{"type":"string","maxLength":500},
+    "caption":{"type":["string","null"],"maxLength":1000},
+    "description":{"type":["string","null"],"maxLength":4000},
+    "variant":{"enum":["original","large","medium","thumbnail","ogp"]},
+    "associations":{"type":"array","maxItems":100,"items":{
+      "type":"object","additionalProperties":false,"required":["contentType","contentId","role"],
+      "properties":{
+        "contentType":{"type":"string","minLength":1,"maxLength":80},
+        "contentId":{"type":"string","minLength":1,"maxLength":200},
+        "role":{"enum":["hero","thumbnail","ogp","inline"]},
+        "position":{"type":"integer","minimum":0}
+      }
+    }}
+  }
+}

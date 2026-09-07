@@ -1,0 +1,26 @@
+---
+import { resolveContentAsset } from '@/lib/content-assets';
+import { expandReusableBlocks } from '@/lib/reusable-patterns';
+import type { ContentBlockType } from '@/server/core/content-ast';
+type Block = ContentBlockType;
+interface Props { blocks: Block[]; }
+const { blocks=[] } = Astro.props;
+const expandedBlocks = await expandReusableBlocks(blocks);
+const resolvedBlocks = await Promise.all(expandedBlocks.map(async (block) => block.type === 'image' ? { block, asset: await resolveContentAsset(block.assetId) } : { block, asset: null }));
+---
+<div class="article-content">
+{resolvedBlocks.map(({ block, asset }) => {
+  if (block.type === 'paragraph') return <p>{block.content}</p>;
+  if (block.type === 'heading') return block.level === 2 ? <h2>{block.content}</h2> : block.level === 3 ? <h3>{block.content}</h3> : <h4>{block.content}</h4>;
+  if (block.type === 'unordered_list') return <ul>{block.items.map(i => <li>{i}</li>)}</ul>;
+  if (block.type === 'ordered_list') return <ol>{block.items.map(i => <li>{i}</li>)}</ol>;
+  if (block.type === 'quote') return <blockquote>{block.content}</blockquote>;
+  if (block.type === 'image' && asset) return <figure><img src={asset.path} alt={block.alt || ''} loading="lazy" /></figure>;
+  if (block.type === 'image') return <div class="asset-fallback" role="img" aria-label="画像を表示できません" data-asset-id={block.assetId}>画像を表示できません</div>;
+  if (block.type === 'table') return <div class="article-table"><table><thead><tr>{block.headers.map(header => <th>{header}</th>)}</tr></thead><tbody>{block.rows.map(row => <tr>{row.map(cell => <td>{cell}</td>)}</tr>)}</tbody></table></div>;
+  if (block.type === 'separator') return <hr />;
+  if (block.type === 'reusable') { console.warn(`[renderer-warning] Unresolved reusable block: ${block.ref}`); return <div class="article-unsupported" data-block-type="reusable">再利用コンテンツを表示できません。</div>; }
+  const unsupportedBlock = block as unknown as { type: string };
+  return <div class="article-unsupported" data-block-type={unsupportedBlock.type}>このコンテンツブロックは現在表示できません。</div>;
+})}
+</div>

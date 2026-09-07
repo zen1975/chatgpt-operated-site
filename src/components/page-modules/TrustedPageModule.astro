@@ -1,0 +1,37 @@
+---
+import ArticleRenderer from '@/components/ArticleRenderer.astro';
+import type { RenderSection } from '@/server/page-composition/renderer';
+
+interface Props { section: RenderSection; }
+const { section } = Astro.props;
+const props = (section.props || {}) as Record<string, any>;
+const asset = (path: string) => section.assets[path]?.path;
+const assetAlt = (_path: string, fallback: string) => props.alt || fallback;
+---
+{section.issue ? <div class="page-module-unsupported" role="status" data-renderer-issue={section.issue}>このセクションは現在表示できません。</div> : section.sectionType === 'hero' ? (
+  <section class={`page-module page-module--hero page-module--hero-${section.variant}`} aria-labelledby={`page-section-${section.id}`}>
+    <div class="page-module__inner"><div>{props.eyebrow && <p class="eyebrow">{props.eyebrow}</p>}<h1 id={`page-section-${section.id}`}>{props.title}</h1>{props.lead && <p class="page-module__lead">{props.lead}</p>}<div class="hero-actions">{props.primaryCta && <a class="button button--primary" href={props.primaryCta.href}>{props.primaryCta.label}</a>}{props.secondaryCta && <a class="button button--ghost" href={props.secondaryCta.href}>{props.secondaryCta.label}</a>}</div></div>{asset('assetId') && <img src={asset('assetId')} alt={assetAlt('assetId', props.title)} />}</div>
+  </section>
+) : section.sectionType === 'richText' ? (
+  <section class={`page-module page-module--richtext page-module--${section.variant}`}><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<ArticleRenderer blocks={props.blocks} /></div></section>
+) : section.sectionType === 'mediaText' ? (
+  <section class={`page-module page-module--media page-module--${section.variant}`}><div class="page-module__inner"><img src={asset('assetId')} alt={assetAlt('assetId', props.title)} /><div>{props.eyebrow && <p class="eyebrow">{props.eyebrow}</p>}<h2>{props.title}</h2><p>{props.body}</p>{props.cta && <a class="button" href={props.cta.href}>{props.cta.label}</a>}</div></div></section>
+) : section.sectionType === 'cardGrid' ? (
+  <section class={`page-module page-module--cards page-module--${section.variant}`}><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<div class="page-module__grid">{props.items.map((item: any, index: number) => <article class="page-module__card"><div class="page-module__card-media">{asset(`items[${index}].assetId`) && <img src={asset(`items[${index}].assetId`)} alt={item.title} />}</div><div><h3>{item.href ? <a href={item.href}>{item.title}</a> : item.title}</h3>{item.eyebrow && <p class="eyebrow">{item.eyebrow}</p>}{item.body && <p>{item.body}</p>}</div></article>)}</div></div></section>
+) : section.sectionType === 'stats' ? (
+  <section class="page-module page-module--stats"><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<div class="page-module__stats">{props.items.map((item: any) => <div><strong>{item.value}</strong><h3>{item.label}</h3>{item.body && <p>{item.body}</p>}</div>)}</div></div></section>
+) : section.sectionType === 'faq' ? (
+  <section class="page-module page-module--faq"><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<dl>{props.items.map((item: any) => <><dt>{item.question}</dt><dd>{item.answer}</dd></>)}</dl></div></section>
+) : section.sectionType === 'timeline' ? (
+  <section class="page-module page-module--timeline"><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<ol>{props.items.map((item: any) => <li><time>{item.date}</time><h3>{item.title}</h3>{item.body && <p>{item.body}</p>}</li>)}</ol></div></section>
+) : section.sectionType === 'table' ? (
+  <section class="page-module page-module--table"><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<div class="page-module__table-wrap"><table><thead><tr>{props.headers.map((header: string) => <th scope="col">{header}</th>)}</tr></thead><tbody>{props.rows.map((row: any) => <tr data-row-id={row.id}>{(Array.isArray(row) ? row : row.cells).map((cell: string) => <td>{cell}</td>)}</tr>)}</tbody></table></div></div></section>
+) : section.sectionType === 'logoCloud' ? (
+  <section class="page-module page-module--logos"><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<div class="page-module__logos">{props.items.map((item: any, index: number) => <a href={item.href || '#'}><img src={asset(`items[${index}].assetId`)} alt={item.name} /><span>{item.name}</span></a>)}</div></div></section>
+) : section.sectionType === 'contentList' ? (
+  <section class={`page-module page-module--content-list page-module--${section.variant}`}><div class="page-module__inner">{props.heading && <h2>{props.heading}</h2>}<div class="page-module__list">{props.items.map((item: any, index: number) => <article>{asset(`items[${index}].assetId`) && <img src={asset(`items[${index}].assetId`)} alt={item.title} />}<div><p class="eyebrow">{item.meta || section.variant}</p><h3><a href={item.href}>{item.title}</a></h3>{item.excerpt && <p>{item.excerpt}</p>}</div></article>)}</div></div></section>
+) : section.sectionType === 'cta' ? (
+  <section class={`page-module page-module--cta page-module--${section.variant}`}><div class="page-module__inner"><p class="eyebrow">{props.eyebrow}</p><h2>{props.title}</h2>{props.body && <p>{props.body}</p>}<div class="hero-actions"><a class="button button--primary" href={props.primaryCta.href}>{props.primaryCta.label}</a>{props.secondaryCta && <a class="button button--ghost" href={props.secondaryCta.href}>{props.secondaryCta.label}</a>}</div></div></section>
+) : section.sectionType === 'reusable' ? (
+  <section class={`page-module page-module--reusable page-module--${section.variant}`}><div class="page-module__inner"><ArticleRenderer blocks={section.reusableBlocks as any} /></div></section>
+) : <div class="page-module-unsupported" role="status" data-renderer-issue={`UNKNOWN_PAGE_MODULE:${section.sectionType}`}>このセクションは現在表示できません。</div>}

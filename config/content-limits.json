@@ -1,0 +1,1 @@
+{"news":{"title":{"maxLength":80},"excerpt":{"maxLength":160},"seoTitle":{"maxLength":60},"seoDescription":{"maxLength":160}},"timedContent":{"title":{"maxLength":60},"body":{"maxLength":180}}}

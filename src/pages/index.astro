@@ -1,0 +1,24 @@
+---
+export const prerender = false;
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import ContentCard from '@/components/ContentCard.astro';
+import TimedContentSlot from '@/components/TimedContentSlot.astro';
+import { getNewsWithMedia, getArticlesWithMedia } from '@/lib/content';
+const news = await getNewsWithMedia(3);
+const articles = await getArticlesWithMedia(3);
+---
+<BaseLayout title="ChatGPT Website Starter" description="Open-source infrastructure for websites clients can update from ChatGPT.">
+  <Fragment slot="global-top"><TimedContentSlot placement="global_top" /></Fragment>
+  <main>
+    <section class="hero"><div class="shell">
+      <h1>Build websites your clients can update from ChatGPT.</h1>
+      <p>ChatGPT is the interface. GitHub Commands, Cloudflare Workers, D1 and R2 form the controlled infrastructure underneath.</p>
+    </div></section>
+    <section class="section"><div class="shell"><h2>Latest news</h2><div class="card-grid">
+      {news.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/news/${item.slug}/`} meta={item.published_at?.slice(0,10)} />)}
+    </div></div></section>
+    <section class="section"><div class="shell"><h2>Latest articles</h2><div class="card-grid">
+      {articles.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/column/${item.slug}/`} image={item.media.thumbnail?.path} meta={item.published_at?.slice(0,10)} />)}
+    </div></div></section>
+  </main>
+</BaseLayout>
