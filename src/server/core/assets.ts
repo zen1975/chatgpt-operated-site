@@ -128,16 +128,22 @@ export async function findOrphanAssets(limit = 100) {
 
 /** Compensation for a composite content+asset command. It only removes an
  * asset that is still unassociated; an attached asset is never deleted. */
-export async function compensateUnassociatedAsset(assetId: string) {
-  const row = await env.DB.prepare(`SELECT id,r2_key FROM assets WHERE id=? LIMIT 1`).bind(assetId).first<{ id:string; r2_key:string }>();
-  if (!row) return { cleaned: true, missing: true };
-  const association = await env.DB.prepare(`SELECT 1 FROM content_assets WHERE asset_id=? LIMIT 1`).bind(assetId).first();
-  if (association) return { cleaned: false, protected: true };
-  const storage = createAssetStorage();
-  await storage.delete(row.r2_key);
-  await env.DB.prepare(`DELETE FROM assets WHERE id=? AND NOT EXISTS (SELECT 1 FROM content_assets WHERE asset_id=?)`).bind(assetId, assetId).run();
-  return { cleaned: true, missing: false };
-}
+/**
+ * Deliberately not implemented as an eager compensation in the command path.
+ *
+ * An R2 key here is content-addressed, so it is shared state rather than
+ * something one attempt owns: a stale attempt deleting it can remove the object
+ * a concurrent retry has just written and is about to reference, leaving a
+ * committed D1 record pointing at nothing. Intake registration now travels in
+ * the outer command's fenced batch, so a failed command commits no asset row at
+ * all -- the worst outcome is an unreferenced content-addressed object, which
+ * is inert.
+ *
+ * Reclaiming those objects belongs to a separate garbage-collection pass that
+ * can apply a grace window and prove no D1 reference and no live execution uses
+ * the key. Neither can be proven from inside a failing command.
+ */
+
 
 function associationStatements(asset: AssetIntake, id: string, now: string) {
   return asset.associations.map((association) => env.DB.prepare(
@@ -151,7 +157,38 @@ function associationStatements(asset: AssetIntake, id: string, now: string) {
  * object is compensating-deleted unless an existing logical asset already
  * owns the deterministic key. No logical asset is exposed without metadata.
  */
-export async function ingestAsset(input: unknown, bytes: AssetBinary, execution: CommandExecution) {
+/**
+ * The D1 work an intake needs, handed to whichever command owns the job.
+ *
+ * Intake never completes a command. A provider-backed replacement calls this,
+ * then puts `statements` into its *own* final fenced batch alongside the
+ * attachment, the revision and the single success transition. When intake
+ * finalized the shared job itself, a nested call marked the parent command
+ * successful and cleared its lease before the parent had done anything: the
+ * parent's batch then failed its own fence, while lookups reported a
+ * replacement that never happened.
+ */
+export type AssetIntakePreparation = {
+  result: {
+    contentType: string;
+    contentId: string;
+    assetId: string;
+    logicalAssetId: string;
+    r2Key: string;
+    url: string;
+    variant: string;
+    reused: boolean;
+  };
+  statements: unknown[];
+};
+
+/**
+ * Fetch-side intake: validate the bytes, derive the canonical identity, put the
+ * content-addressed object, and return the D1 statements that register it.
+ *
+ * Performs no job completion and clears no lease.
+ */
+export async function prepareAssetIntake(input: unknown, bytes: AssetBinary, execution: CommandExecution): Promise<AssetIntakePreparation> {
   const commandId = execution.commandId;
   const asset = AssetIntakeDescriptor.parse(input);
   if (bytes.byteLength !== asset.bytes) throw new CommandError('USER_CORRECTABLE', 'ASSET_BYTE_COUNT_MISMATCH', 'Asset byte count does not match payload.');
@@ -167,31 +204,43 @@ export async function ingestAsset(input: unknown, bytes: AssetBinary, execution:
   const delivery = resolveAssetDelivery({ id: existing?.id || id, logical_asset_id: existing?.logical_asset_id || logicalAssetId, r2_key: r2Key, variant: asset.variant });
   const result = { contentType: 'asset', contentId: delivery.assetId, assetId: delivery.assetId, logicalAssetId, r2Key, url: delivery.path, variant: asset.variant, reused: Boolean(existing) };
 
-  const storage = createAssetStorage();
-  await storage.put(r2Key, bytes, {
+  // Content-addressed: the key is the SHA-256 of these exact bytes, so a
+  // concurrent attempt writing the same key writes the same object.
+  await createAssetStorage().put(r2Key, bytes, {
     httpMetadata: { contentType: asset.mimeType },
     customMetadata: { sha256: computed, logicalAssetId, variant: asset.variant }
   });
 
-  try {
-    const after = JSON.stringify({ ...result, sourceProvider: asset.sourceProvider, sourceId: asset.sourceId, sourceMetadata: asset.sourceMetadata, sha256: computed, bytes: asset.bytes, mimeType: asset.mimeType });
-    const statements = existing ? [] : [env.DB.prepare(
-      `INSERT INTO assets (id,r2_key,original_filename,mime_type,width,height,bytes,alt,caption,description,original_asset_id,variant,created_at,source_provider,source_id,source_sha256,source_metadata_json,sha256,logical_asset_id,intake_key,validation_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(id, r2Key, asset.originalFilename, asset.mimeType, asset.width ?? null, asset.height ?? null, asset.bytes, asset.alt, asset.caption ?? null, asset.description ?? null, asset.variant === 'original' ? null : assetId(computed, 'original'), asset.variant, now, asset.sourceProvider, asset.sourceId, computed, JSON.stringify({ ...asset.sourceMetadata, sourceProvider: asset.sourceProvider, sourceId: asset.sourceId, expectedSha256: asset.expectedSha256 ?? null }), computed, logicalAssetId, intakeKey, 'validated')];
-    const batch = await fencedBatch(execution, [
-      ...statements,
+  // No compensating delete on failure. The key is shared state, not owned by
+  // this attempt: a stale attempt that deleted it could remove the object a
+  // concurrent retry had just written and is about to reference. If the D1 side
+  // never commits, the object is left as an unreferenced content-addressed
+  // blob -- inert, and safe for a later garbage-collection pass that can prove
+  // no D1 reference and no live execution uses the key. Eager deletion in the
+  // command path cannot prove either.
+  const after = JSON.stringify({ ...result, sourceProvider: asset.sourceProvider, sourceId: asset.sourceId, sourceMetadata: asset.sourceMetadata, sha256: computed, bytes: asset.bytes, mimeType: asset.mimeType });
+  const registration = existing ? [] : [env.DB.prepare(
+    `INSERT INTO assets (id,r2_key,original_filename,mime_type,width,height,bytes,alt,caption,description,original_asset_id,variant,created_at,source_provider,source_id,source_sha256,source_metadata_json,sha256,logical_asset_id,intake_key,validation_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(id, r2Key, asset.originalFilename, asset.mimeType, asset.width ?? null, asset.height ?? null, asset.bytes, asset.alt, asset.caption ?? null, asset.description ?? null, asset.variant === 'original' ? null : assetId(computed, 'original'), asset.variant, now, asset.sourceProvider, asset.sourceId, computed, JSON.stringify({ ...asset.sourceMetadata, sourceProvider: asset.sourceProvider, sourceId: asset.sourceId, expectedSha256: asset.expectedSha256 ?? null }), computed, logicalAssetId, intakeKey, 'validated')];
+
+  return {
+    result,
+    statements: [
+      ...registration,
       ...associationStatements(asset, delivery.assetId, now),
-      env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(), 'asset', delivery.assetId, existing ? 'reuse' : 'create', null, after, commandId, now),
-      successStatement(execution, result, now)
-    ]);
-    // The final transition must have affected exactly the row this lease owns.
-    assertOwnedRowAffected(execution, batch[batch.length - 1]);
-    return result;
-  } catch (error) {
-    const row = await env.DB.prepare('SELECT id FROM assets WHERE sha256=? AND variant=? LIMIT 1').bind(computed, asset.variant).first<{id:string}>();
-    if (!row) {
-      try { await storage.delete(r2Key); } catch { /* best-effort compensation; no logical D1 row is exposed */ }
-    }
-    throw error;
-  }
+      env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(), 'asset', delivery.assetId, existing ? 'reuse' : 'create', null, after, commandId, now)
+    ]
+  };
+}
+
+/**
+ * Intake for a command whose *own* job this is -- currently only the top-level
+ * WordPress import. It is the outer owner, so it performs the single
+ * finalization itself, in one fenced batch with the registration.
+ */
+export async function ingestAssetAsRootCommand(input: unknown, bytes: AssetBinary, execution: CommandExecution) {
+  const { result, statements } = await prepareAssetIntake(input, bytes, execution);
+  const batch = await fencedBatch(execution, [...statements, successStatement(execution, result)]);
+  assertOwnedRowAffected(execution, batch[batch.length - 1]);
+  return result;
 }
