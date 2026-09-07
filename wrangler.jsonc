@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "replace-me-chatgpt-operated-site",
+  "main": "@astrojs/cloudflare/entrypoints/server",
+  "compatibility_date": "2026-08-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "replace-me-content",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS_BUCKET",
+      "bucket_name": "replace-me-assets"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SESSION",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "vars": {
+    "SITE_ORIGIN": "https://example.com",
+    "SITE_TIMEZONE": "UTC",
+    "COMMAND_TRUSTED_ACTOR": "github-actions",
+    "CONTROL_READ_SCOPES": "intake:read",
+    "COMMAND_TRUSTED_SCOPES": "content:write,content:archive,content:rollback,asset:write,product:create,product:update,product:archive,product:asset,product:rollback,page:write,page:structure,page:rollback,page:item:write"
+  }
+}
