@@ -14,7 +14,7 @@ Before writing anything:
 4. Use the current command schema as structural authority.
 5. Use only capabilities explicitly exposed by the application.
 
-For image-bearing operations, set `context.requiresAssetIntake: true`. Authenticated Asset Intake readiness is owned by the GitHub Actions dispatch gate; inability of the ChatGPT client to perform that authenticated readiness check is not itself an operation failure.
+For operations that introduce a new provider-backed asset, keep `context.requiresAssetIntake: true` as operation metadata. The reference dispatch adapter derives readiness from the validated provider reference; canonical `assetId` operations do not require Asset Intake. An alternative orchestrator may replace GitHub Actions, but it must preserve the signed Worker contracts and fail closed.
 
 Do not invent alternate mutation paths. Do not write arbitrary SQL, HTML, CSS, JavaScript, or JSON patches as a substitute for a supported command.
 

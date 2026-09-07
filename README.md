@@ -15,7 +15,7 @@ npm ci
 npm run verify   # build + contract checks
 ```
 
-Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance.
+Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance. The minimal GitHub Actions golden path is documented in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md).
 
 ## What is included
 
@@ -96,6 +96,7 @@ Client
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
+- [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) — minimal, replaceable GitHub Actions dispatch adapter
 - [`docs/EXTENDING_SITE_OPERATIONS.md`](docs/EXTENDING_SITE_OPERATIONS.md) — adding new controlled site operations
 - [`AGENTS.md`](AGENTS.md) — operating contract for coding/operation agents
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development setup and what the contract checks enforce
@@ -107,9 +108,10 @@ This repository is currently a **private OSS candidate** assembled from a review
 
 Before public release it will be validated through clean installation, build and contract checks, disposable provisioning, and an actual ChatGPT-operated end-to-end site workflow including image handling.
 
-Clean installation, build, and contract checks now run on every push and pull
-request. Disposable provisioning and the end-to-end ChatGPT-operated workflow
-are still outstanding.
+Clean installation, build, contract checks, and the reference dispatch adapter
+are covered by CI. Disposable provisioning and the end-to-end
+ChatGPT-operated workflow are still outstanding; the reference adapter is not
+presented as production acceptance evidence.
 
 ## Licence
 
