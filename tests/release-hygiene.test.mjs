@@ -182,4 +182,29 @@ test('.dockerignore excludes local dependencies and secret material', async () =
   for (const kept of ['examples', 'schemas', 'config', 'migrations', 'tests', 'scripts', 'src', 'docs', 'package.json', 'package-lock.json']) {
     assert.ok(!patterns.includes(kept), `.dockerignore must not exclude ${kept}: the image runs the contract checks against it`);
   }
+
+  // The placeholder example is checked by those same checks, so it has to be in
+  // the image even though every other .dev.vars file is excluded.
+  assert.ok(patterns.includes('!.dev.vars.example'), '.dockerignore must re-include .dev.vars.example, which holds placeholders only');
+});
+
+// A secret the Worker reads must be discoverable by an installer: typed,
+// documented, and present in the local-development example.
+test('every secret the implementation reads appears in .dev.vars.example', async () => {
+  const [reads, example] = await Promise.all([collectRuntimeConfigReads(), readTracked('.dev.vars.example')]);
+
+  const missing = [];
+  for (const [name] of reads) {
+    if (NOT_CONFIGURATION.has(name)) continue;
+    if (!/_SECRET$|_TOKEN$|_KEY$/.test(name)) continue;
+    if (!example.includes(name)) missing.push(name);
+  }
+  assert.deepEqual(missing, [], `.dev.vars.example must show these secrets as placeholders:\n${missing.join('\n')}`);
+});
+
+test('the local-development example carries no real values', async () => {
+  const example = await readTracked('.dev.vars.example');
+  for (const [, value] of example.matchAll(/^[A-Z_]+="([^"]*)"/gm)) {
+    assert.match(value, /^replace-me|^https:\/\/(legacy|artifacts)\.example\.com|@example\./, `.dev.vars.example must contain placeholders only, found: ${value.slice(0, 40)}`);
+  }
 });

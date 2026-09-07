@@ -283,8 +283,8 @@ test('an unsupported provider fails closed with an explicit error', async () => 
 
 test('google_drive is checked against the Drive readiness endpoint', async () => {
   const site = installation({ readiness: READY });
-  const readiness = await checkAssetIntakeReadiness({ provider: 'google_drive', ...base, fetchImpl: site.fetchImpl });
-  assert.equal(readiness.status, 'READY');
+  const outcome = await checkAssetIntakeReadiness({ provider: 'google_drive', ...base, fetchImpl: site.fetchImpl });
+  assert.equal(outcome.readiness.status, 'READY');
   assert.deepEqual(site.calls.map((call) => call.pathname), ['/api/control/readiness/asset-intake/']);
 });
 

@@ -83,6 +83,8 @@ export async function installWorkerRuntime(overrides = {}) {
     SITE_ORIGIN: 'https://example.com',
     SITE_TIMEZONE: 'UTC',
     COMMAND_HMAC_SECRET: 'test-secret',
+    CONTROL_READ_HMAC_SECRET: 'test-control-secret',
+    READINESS_RECEIPT_HMAC_SECRET: 'test-receipt-secret',
     COMMAND_TRUSTED_ACTOR: 'github-actions',
     COMMAND_TRUSTED_SCOPES: '*',
     ...overrides

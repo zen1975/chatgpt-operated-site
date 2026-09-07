@@ -33,7 +33,23 @@ export const CommandEnvelope = z.object({
     ruleVersion:z.string(),
     targetSite:TargetSite,
     requiresAssetIntake: z.boolean().optional(),
-    preflight: z.object({ commandDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), contractVersion: z.string().min(1).max(200) }).strict().optional()
+    preflight: z.object({ commandDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), contractVersion: z.string().min(1).max(200) }).strict().optional(),
+    /**
+     * Signed evidence that this installation verified provider readiness for
+     * this exact command. Attestation metadata, so it is excluded from the
+     * command digest it binds to.
+     */
+    readinessReceipt: z.object({
+      receiptVersion: z.literal(1),
+      commandDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      contractVersion: z.string().min(1).max(200),
+      siteId: z.string().min(1).max(200),
+      provider: z.string().min(1).max(80),
+      readiness: z.string().min(1).max(40),
+      issuedAt: z.string().datetime(),
+      expiresAt: z.string().datetime(),
+      signature: z.string().regex(/^[a-f0-9]{64}$/)
+    }).strict().optional()
   }).strict(),
   payload: z.unknown()
 }).strict();

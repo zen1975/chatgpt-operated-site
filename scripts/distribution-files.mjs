@@ -22,8 +22,13 @@ const EXCLUDED_DIRECTORIES = new Set([
   '.git', 'node_modules', 'dist', '.astro', '.wrangler', '.cache', 'coverage', '.github/.cache'
 ]);
 
-/** Local-only files that must never be inspected as if they were distributed. */
-const EXCLUDED_FILE = /^(\.dev\.vars(\..*)?|\.env(\..*)?|.*\.pem|.*\.key|service-account.*\.json|\.DS_Store|.*\.log)$/;
+/**
+ * Local-only files that must never be inspected as if they were distributed.
+ *
+ * `.dev.vars.example` is deliberately not one of them: it holds placeholders,
+ * ships with the distribution, and the hygiene checks assert its contents.
+ */
+const EXCLUDED_FILE = /^(\.dev\.vars(?!\.example)(\..*)?|\.env(?!\.example)(\..*)?|.*\.pem|.*\.key|service-account.*\.json|\.DS_Store|.*\.log)$/;
 
 async function walk(directory, collected = []) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -70,6 +75,7 @@ export async function distributionFiles() {
  * on it would otherwise pass by inspecting nothing.
  */
 export const REQUIRED_IN_EVERY_DISTRIBUTION = [
+  '.dev.vars.example',
   '.dockerignore',
   '.github/workflows/ci.yml',
   '.github/workflows/dispatch-command.yml',
@@ -102,6 +108,7 @@ export const REQUIRED_IN_EVERY_DISTRIBUTION = [
   'src/server/control-plane/replay.ts',
   'src/server/site-identity.ts',
   'src/server/command-assets.ts',
+  'src/server/control-plane/readiness-receipt.ts',
   'src/server/command-schema.ts',
   'src/server/commands.ts',
   'tsconfig.json',

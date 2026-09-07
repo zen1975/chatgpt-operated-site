@@ -8,11 +8,21 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * Context keys that attest a command rather than form part of it.
+ *
+ * A receipt binds itself to the command's digest, so including it in that
+ * digest would be circular. Listed once and used by both the gate and the
+ * Worker, so the two cannot disagree about what is being attested -- and
+ * deliberately narrow: payload, targetSite, ruleVersion and the rest stay in.
+ */
+export const ATTESTATION_CONTEXT_KEYS = ['preflight', 'readinessReceipt'] as const;
+
 /** The receipt is binding metadata, not part of the command being attested. */
 export function commandForDigest(input: unknown) {
   const command = CommandEnvelope.parse(input);
   const context = { ...command.context } as Record<string, unknown>;
-  delete context.preflight;
+  for (const key of ATTESTATION_CONTEXT_KEYS) delete context[key];
   return { ...command, context };
 }
 

@@ -87,6 +87,65 @@
             "contractVersion"
           ],
           "additionalProperties": false
+        },
+        "readinessReceipt": {
+          "type": "object",
+          "properties": {
+            "receiptVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "commandDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "contractVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "siteId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "provider": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "readiness": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "issuedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+            },
+            "expiresAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+            },
+            "signature": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "receiptVersion",
+            "commandDigest",
+            "contractVersion",
+            "siteId",
+            "provider",
+            "readiness",
+            "issuedAt",
+            "expiresAt",
+            "signature"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

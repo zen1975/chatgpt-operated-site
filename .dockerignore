@@ -18,8 +18,12 @@ dist
 coverage
 
 # Local secrets. These must never reach an image layer.
+#
+# .dev.vars.example is exempt: it carries placeholders only, the release-hygiene
+# checks assert that, and the image runs those checks.
 .dev.vars
 .dev.vars.*
+!.dev.vars.example
 .env
 .env.*
 *.pem

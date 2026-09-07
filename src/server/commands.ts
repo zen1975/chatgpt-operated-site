@@ -13,6 +13,8 @@ import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
 import { evaluateClaim, evaluateExistingJob } from './control-plane/replay';
+import { isImageBearingOperation, providerIntake } from './command-assets';
+import { verifyReadinessReceipt } from './control-plane/readiness-receipt';
 import { claimCommand, readJob, reopenFailedJob, reclaimExpiredLease, recordFailure, fencedBatch, named, successStatement, guardedSuccessStatement, assertOwnedRowAffected, SUCCESS_STATEMENT_NAME, type CommandExecution, type NamedStatement } from './control-plane/job-store';
 import { SITE_ID, SiteIdentityMismatch, assertCommandTargetsThisSite } from './site-identity';
 import { contractVersion } from './control-plane/contracts';
@@ -308,12 +310,45 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
     return { success:true, commandId:cmd.commandId, idempotent:true, result: existing.result };
   }
 
-  // Admission. All non-mutating, all before anything is claimed.
+  // Admission. All non-mutating, all before anything is claimed -- and before
+  // any provider fetch or R2/D1 write, which happen inside the handler below.
   await verifyPreflightBinding(cmd);
   assertRuleVersion(cmd.context.ruleVersion);
   const payloadSchema = COMMAND_PAYLOAD_SCHEMAS[cmd.command as keyof typeof COMMAND_PAYLOAD_SCHEMAS];
   if (!payloadSchema) throw new CommandError('FATAL_SYSTEM_ERROR','COMMAND_NOT_IMPLEMENTED',`Command not implemented: ${cmd.command}`);
-  payloadSchema.parse(cmd.payload);
+  // Parsed once; the same validated value decides the asset semantics below.
+  const validatedPayload = payloadSchema.parse(cmd.payload);
+
+  // The image-operation contract is enforced here, not only at the dispatch
+  // gate. /api/v1/commands is an authenticated ingress that does not pass
+  // through the gate, so a rule enforced only there could be skipped by
+  // dispatching directly -- reaching the mutation handler without provider
+  // readiness having been checked at all.
+  const imageBearing = isImageBearingOperation(cmd.command, validatedPayload);
+  const intake = providerIntake(cmd.command, validatedPayload);
+  const flagged = cmd.context.requiresAssetIntake === true;
+
+  if (imageBearing && !flagged) {
+    throw new CommandError('USER_CORRECTABLE','ASSET_INTAKE_FLAG_MISSING',`${cmd.command} is an image-bearing operation, so context.requiresAssetIntake must be true.`,false,{ command: cmd.command });
+  }
+  if (!imageBearing && flagged) {
+    throw new CommandError('USER_CORRECTABLE','ASSET_INTAKE_FLAG_UNEXPECTED',`context.requiresAssetIntake is true but ${cmd.command} is not an image-bearing operation.`,false,{ command: cmd.command });
+  }
+
+  // Provider intake requires evidence that this installation actually checked
+  // the provider, signed with a secret the command ingress does not hold. A
+  // canonical asset needs none: no provider is involved.
+  if (intake) {
+    if (!intake.provider) {
+      throw new CommandError('USER_CORRECTABLE','ASSET_INTAKE_PROVIDER_UNKNOWN','The command performs provider intake but names no provider.');
+    }
+    await verifyReadinessReceipt({
+      receipt: cmd.context.readinessReceipt,
+      commandDigest: digest,
+      contractVersion: contractVersion(),
+      provider: intake.provider
+    });
+  }
 
   // Transition to running, atomically. Each branch returns the lease this
   // attempt holds; completion is refused unless it still holds it.

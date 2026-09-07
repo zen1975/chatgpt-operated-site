@@ -69,6 +69,7 @@ declare module 'cloudflare:workers' {
     // Secrets. Provision with `wrangler secret put`; never commit values.
     COMMAND_HMAC_SECRET: string;
     CONTROL_READ_HMAC_SECRET?: string;
+    READINESS_RECEIPT_HMAC_SECRET?: string;
     EMERGENCY_NEWS_HMAC_SECRET?: string;
     CONTROL_READ_SCOPES?: string;
     GOOGLE_DRIVE_ACCESS_TOKEN?: string;
