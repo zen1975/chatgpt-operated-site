@@ -7,7 +7,7 @@ on:
       - '.github/workflows/bootstrap-standalone-once.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bootstrap:
@@ -30,41 +30,9 @@ jobs:
       - name: Standalone build
         run: npm run build
 
-      - name: Replace bootstrap workflow with permanent CI
-        run: |
-          mkdir -p .github/workflows
-          cat > .github/workflows/ci.yml <<'YAML'
-          name: CI
-
-          on:
-            push:
-              branches: [main]
-            pull_request:
-              branches: [main]
-
-          permissions:
-            contents: read
-
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-node@v4
-                  with:
-                    node-version: 22.23.2
-                    cache: npm
-                - run: npm ci
-                - run: npm run build
-          YAML
-          rm -f .github/workflows/bootstrap-standalone-once.yml
-
-      - name: Commit accepted standalone baseline
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'build: establish standalone OSS baseline'
-          git push origin HEAD:main
-
-# rerun after restoring required generic styles
+      - name: Export generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-package-lock
+          path: package-lock.json
+          if-no-files-found: error
