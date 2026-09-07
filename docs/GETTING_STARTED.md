@@ -20,14 +20,11 @@ npm ci
 npm run verify
 ```
 
-`npm run verify` runs the production build and the contract checks. The contract
-checks are what make a clean-environment install trustworthy: they validate the
-shipped command examples against the current schemas, apply the migrations to a
-brand-new database, confirm the committed Cloudflare identifiers are still
-placeholders, and scan the tracked files for credential-shaped content. A green
-build alone does not prove any of that.
+`npm run verify` runs the production build and the contract checks. The contract checks validate the shipped command examples against the current schemas, apply the migrations to a brand-new database, confirm the committed Cloudflare identifiers are still placeholders, and scan the tracked files for credential-shaped content.
 
 The committed `package-lock.json` is the install contract. Do not regenerate dependencies as part of ordinary CI or deployment.
+
+If these two commands are green on a clean clone, the repository baseline itself is working. You can then begin adapting it to a real client.
 
 For local Cloudflare development, replace the placeholder resource identifiers in `wrangler.jsonc` with resources belonging to the installation. Do not commit real secrets.
 
@@ -41,9 +38,7 @@ Start with:
 
 Replace placeholder values with installation-specific configuration. Keep secrets in the appropriate Cloudflare/GitHub secret stores rather than source control.
 
-`docs/CONFIGURATION.md` is the complete reference for every binding, plaintext
-variable, and secret the Worker reads, and for which ingress endpoints exist and
-how each one authenticates.
+`docs/CONFIGURATION.md` is the complete reference for every binding, plaintext variable, and secret the Worker reads, and for which ingress endpoints exist and how each one authenticates.
 
 ## Replace the reference website
 
@@ -66,20 +61,23 @@ Do not make arbitrary DOM or database state writable. Define each operation inte
 
 See `EXTENDING_SITE_OPERATIONS.md` for the extension pattern and `DAILY_OPERATION.md` for the resulting client workflow.
 
-## Before a real client handoff
+## Baseline complete vs client handoff complete
 
-Verify at least:
+These are deliberately separate.
+
+The **repository baseline is complete** when a clean clone installs and `npm run verify` is green. That is the point at which an implementer has a trustworthy base to build from.
+
+A **real client installation** still needs its own account provisioning and acceptance. Before handing a client that installation, verify at least:
 
 ```text
-clean clone
-  -> npm ci
-  -> npm run build
-  -> provision disposable resources
+configure client-owned GitHub / Cloudflare / optional Asset Intake
+  -> provision D1 / R2 and other required bindings
   -> run migrations
-  -> verify ordinary text/content operation
-  -> verify image-bearing operation
-  -> verify rendered public result
-  -> verify failure paths do not bypass the command boundary
+  -> verify one ordinary text/content operation
+  -> verify one image-bearing operation if images are enabled
+  -> verify the rendered public result
 ```
+
+Those deployment-specific checks should not be confused with the job of this repository: providing a working, understandable construction baseline.
 
 The client-facing goal is simple: once provisioning is complete, the client should be able to use ChatGPT for routine website updates without operating the infrastructure directly.
