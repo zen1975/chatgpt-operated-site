@@ -46,9 +46,15 @@ misaddressed or malformed command never reaches the installation at all.
 
 ### Gate 3: the command must name this installation
 
-`context.targetSite` is **required** and must equal `site.id` in
-`config/site-profile.json`. An absent value is an unaddressed command, not a
-wildcard.
+`context.targetSite` is **required by the envelope schema itself**, so an absent
+or empty value fails at gate 1. Gate 3 adds the part the schema cannot know:
+the value must equal `site.id` in `config/site-profile.json`.
+
+`commandId` is likewise constrained by one authoritative schema
+(`CommandId` in `src/server/command-schema.ts`): 8–200 characters of
+`A-Za-z0-9._:-`. The envelope and the command lookup route share it, so an id
+the envelope admits is always one the lookup can address. Ids containing
+Unicode, whitespace or `/` are rejected at gate 1, before any request.
 
 The Worker does not check this field, and the endpoint comes from this
 repository's own configuration — so without this gate, a command prepared for
@@ -122,6 +128,32 @@ exact `commandId` already completed, via `GET /api/control/commands/{commandId}`
 
 This is not a general preflight bypass: only a `commandId` the installation has
 already recorded as successful takes this path.
+
+## Where a command may come from
+
+Exactly one source: an inline envelope or a path to a committed one. The
+workflow passes both of its inputs through verbatim so the gate sees an
+ambiguous pair rather than silently preferring one and discarding the other —
+which would dispatch an operation the operator did not intend. Both supplied is
+`AMBIGUOUS_COMMAND`; neither is `NO_COMMAND`.
+
+A `command_file` path is part of the trust boundary, because the gate echoes the
+command as the operation record. Before the file is opened it must:
+
+- be repository-relative (`COMMAND_FILE_ABSOLUTE`)
+- contain no `..` segment (`COMMAND_FILE_TRAVERSAL`)
+- resolve — via its **real** path, so a symlink cannot escape by looking
+  innocent — inside the repository (`COMMAND_FILE_OUTSIDE_REPOSITORY`)
+- be a regular file (`COMMAND_FILE_NOT_A_FILE`)
+- be committed (`COMMAND_FILE_NOT_TRACKED`)
+
+The tracking check fails closed when git is unavailable: a dispatched command
+must be one the repository actually carries, and "cannot tell" is not "yes".
+
+Nothing about the command is printed until it has parsed as JSON and passed the
+schema. The operation record is written from the validated value, so neither an
+unvalidated file nor a repository-external one can be published through the run
+log.
 
 ## Running it
 

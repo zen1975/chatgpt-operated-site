@@ -4,14 +4,34 @@ import { AssetIntakeDescriptor } from './core/assets';
 import { WordPressAssetReference } from './adapters/assets/wordpress';
 import { MODULE_TYPES, PageStatus, PageType } from './page-composition/schemas';
 
+/**
+ * The identifier of an immutable command, and the authority for that format.
+ *
+ * Every path that resolves a command by id -- the envelope, the control-plane
+ * lookup route, the dispatch gate -- uses this one schema. When the envelope
+ * accepted an id the lookup route could not address, a structurally valid
+ * command could be admitted and then become unresolvable, so the id space is
+ * narrowed here rather than re-stated with different limits per caller.
+ *
+ * ASCII only, and safe unencoded in a URL path segment.
+ */
+export const CommandId = z
+  .string()
+  .min(8)
+  .max(200)
+  .regex(/^[A-Za-z0-9._:-]+$/, 'commandId must be 8-200 characters of A-Z a-z 0-9 . _ : -');
+
+/** The site an operation is addressed to. Required: a command names its target. */
+export const TargetSite = z.string().min(1).max(200);
+
 export const CommandEnvelope = z.object({
   schemaVersion: z.literal(1),
-  commandId: z.string().min(8),
+  commandId: CommandId,
   command: z.enum(['create_news','create_taxonomy_term','create_timed_content','create_asset','import_wordpress_asset','update_content','archive_content','rollback_content','schedule_content','attach_asset','replace_asset','update_seo','create_product','update_product','publish_product','archive_product','replace_product_asset','attach_product_asset','remove_product_asset','reorder_product_assets','rollback_product','create_page','update_page','insert_page_section','update_page_section','remove_page_section','reorder_page_sections','replace_page_section_asset','rollback_page','insert_page_section_item','update_page_section_item','remove_page_section_item','reorder_page_section_items','replace_page_section_item_asset']),
   issuedAt: z.string().datetime(),
   context: z.object({
     ruleVersion:z.string(),
-    targetSite:z.string().optional(),
+    targetSite:TargetSite,
     requiresAssetIntake: z.boolean().optional(),
     preflight: z.object({ commandDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), contractVersion: z.string().min(1).max(200) }).strict().optional()
   }).strict(),

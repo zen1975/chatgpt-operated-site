@@ -59,23 +59,8 @@ jobs:
 
       - run: npm ci
 
-      # The operation record. Commands must never carry credentials, so this is
-      # safe to print and is the audit trail for what was requested.
-      - name: Record the requested command
-        env:
-          COMMAND: ${{ inputs.command }}
-          COMMAND_FILE: ${{ inputs.command_file }}
-        run: |
-          echo "actor:    ${{ github.actor }}"
-          echo "dry run:  ${{ inputs.dry_run }}"
-          if [ -n "$COMMAND_FILE" ]; then
-            echo "source:   $COMMAND_FILE"
-            cat "$COMMAND_FILE"
-          else
-            echo "source:   workflow input"
-            printf '%s\n' "$COMMAND"
-          fi
-
+      # The command is echoed by the script after validation, so the run log is
+      # still the operation record -- without printing unvalidated input.
       - name: Validate, preflight and dispatch
         env:
           SITE_COMMAND_ENDPOINT: ${{ vars.SITE_COMMAND_ENDPOINT }}
@@ -85,12 +70,13 @@ jobs:
           COMMAND_FILE: ${{ inputs.command_file }}
         run: |
           set -euo pipefail
-          ARGS=()
-          if [ -n "$COMMAND_FILE" ]; then
-            ARGS+=(--command-file "$COMMAND_FILE")
-          else
-            ARGS+=(--command "$COMMAND")
-          fi
+          # Both inputs are handed over verbatim, so the script's own
+          # AMBIGUOUS_COMMAND check sees them. Choosing one here would silently
+          # discard the other and dispatch an operation the operator did not
+          # intend. The command is not printed at this point: the script echoes
+          # it as the operation record only after it has passed validation, so
+          # an unvalidated or repository-external file is never published here.
+          ARGS=(--command-file "$COMMAND_FILE" --command "$COMMAND")
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS+=(--dry-run)
           fi

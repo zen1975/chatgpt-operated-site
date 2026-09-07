@@ -3,6 +3,7 @@ import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { authorizeControlRead } from '@/server/control-plane/auth';
 import { controlError } from '@/server/control-plane/http';
+import { CommandId } from '@/server/command-schema';
 
 // Lets the dispatch gate tell "this command already ran" from "this command is
 // new" without guessing. A command whose dispatch response was lost can then be
@@ -15,10 +16,13 @@ export const GET: APIRoute = async ({ request, params }) => {
   try {
     await authorizeControlRead(request, 'command:read');
 
-    const commandId = String(params.commandId || '');
-    if (!/^[A-Za-z0-9._:-]{8,200}$/.test(commandId)) {
+    // The same schema the envelope uses, so this route can address every id the
+    // envelope admits and no id it does not.
+    const parsed = CommandId.safeParse(String(params.commandId || ''));
+    if (!parsed.success) {
       return Response.json({ success: false, error: { code: 'COMMAND_ID_INVALID', message: 'commandId is not a valid identifier.' } }, { status: 422 });
     }
+    const commandId = parsed.data;
 
     const row = await env.DB.prepare('SELECT command_type,status,result_json,created_at,finished_at FROM jobs WHERE command_id=? LIMIT 1')
       .bind(commandId)
