@@ -1,0 +1,56 @@
+.page-composition { overflow-x: clip; }
+.page-module { padding: 72px 0; }
+.page-module__inner { width: min(var(--shell), calc(100% - 48px)); margin-inline: auto; }
+.page-module h1, .page-module h2, .page-module h3 { color: inherit; }
+.page-module h1 { max-width: 18ch; margin: 0; font: 500 clamp(2.5rem, 6vw, 5rem)/1.15 "Zen Old Mincho", Georgia, serif; }
+.page-module h2 { margin: 0 0 28px; font: 500 clamp(1.75rem, 4vw, 3rem)/1.3 "Zen Old Mincho", Georgia, serif; }
+.page-module h3 { margin: 0 0 10px; font-size: 1.1rem; line-height: 1.5; }
+.page-module p { line-height: 1.8; }
+.page-module--hero { background: var(--primary-dark); color: #fff; }
+.page-module--hero-minimal { background: transparent; color: var(--text); }
+.page-module--hero-minimal .page-module__inner { display: block; min-height: 0; }
+.page-module--hero-minimal .page-module__lead { color: var(--text-secondary); }
+.page-module--hero .page-module__inner { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 42%); gap: 48px; align-items: center; min-height: 420px; }
+.page-module--hero img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: .5rem; }
+.page-module__lead { max-width: 48rem; color: rgb(255 255 255 / 82%); font-size: 1.1rem; }
+.page-module--media .page-module__inner { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 56px; align-items: center; }
+.page-module--media img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: .5rem; }
+.page-module--image-right img { order: 2; }
+.page-module--cards .page-module__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.page-module__card { overflow: hidden; border: 1px solid var(--border); border-radius: .5rem; background: #fff; }
+.page-module__card > div:last-child { padding: 20px; }
+.page-module__card-media { overflow: hidden; background: var(--surface); }
+.page-module__card-media:empty { display: none; }
+.page-module__card img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+.page-module--stats .page-module__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.page-module__stats > div { padding: 20px 0; border-top: 1px solid var(--border); }
+.page-module__stats strong { display: block; font: 500 2.5rem/1.2 "Zen Old Mincho", Georgia, serif; }
+.page-module__stats h3 { margin-top: 8px; }
+.page-module--faq dl { margin: 0; border-top: 1px solid var(--border); }
+.page-module--faq dt, .page-module--faq dd { padding: 18px 0; border-bottom: 1px solid var(--border); }
+.page-module--faq dt { font-weight: 600; }
+.page-module--faq dd { margin: 0; color: var(--text-secondary); }
+.page-module--timeline ol { display: grid; gap: 24px; margin: 0; padding: 0; list-style: none; }
+.page-module--timeline li { padding: 24px; border-left: 3px solid var(--accent); background: var(--surface); }
+.page-module--timeline time { color: var(--accent); font-size: .875rem; }
+.page-module--table .page-module__table-wrap { overflow-x: auto; }
+.page-module--table table { width: 100%; min-width: 560px; border-collapse: collapse; }
+.page-module--table th, .page-module--table td { padding: 14px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+.page-module--table th { background: var(--surface); }
+.page-module__logos { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.page-module__logos a { display: grid; gap: 10px; padding: 20px; border: 1px solid var(--border); text-align: center; }
+.page-module__logos img { width: 100%; aspect-ratio: 3 / 1; object-fit: contain; }
+.page-module__list { display: grid; gap: 20px; }
+.page-module__list article { display: grid; grid-template-columns: 180px 1fr; gap: 20px; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.page-module__list img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+.page-module--cta { background: var(--accent); text-align: center; }
+.page-module--cta .page-module__inner { max-width: 800px; }
+.page-module--cta .hero-actions { justify-content: center; }
+.page-module-unsupported { margin: 24px auto; width: min(var(--shell), calc(100% - 48px)); padding: 24px; border: 1px solid #b42318; background: #fff4f2; color: #b42318; }
+@media (max-width: 767px) {
+  .page-module { padding: 56px 0; }
+  .page-module--hero .page-module__inner, .page-module--media .page-module__inner { grid-template-columns: 1fr; gap: 28px; min-height: 0; }
+  .page-module--image-right img { order: 0; }
+  .page-module--cards .page-module__grid, .page-module--stats .page-module__stats, .page-module__logos { grid-template-columns: 1fr; }
+  .page-module__list article { grid-template-columns: 120px 1fr; gap: 12px; }
+}
