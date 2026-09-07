@@ -137,18 +137,26 @@ ambiguous pair rather than silently preferring one and discarding the other —
 which would dispatch an operation the operator did not intend. Both supplied is
 `AMBIGUOUS_COMMAND`; neither is `NO_COMMAND`.
 
-A `command_file` path is part of the trust boundary, because the gate echoes the
-command as the operation record. Before the file is opened it must:
+A `command_file` is read **from the committed Git blob, never from the working
+tree**. "Tracked" is not "unmodified": a committed command file edited locally
+would otherwise be dispatched, and -- since the gate echoes the command as the
+operation record -- printed. Reading `HEAD:<path>` means the bytes dispatched
+are exactly the bytes the repository carries.
 
-- be repository-relative (`COMMAND_FILE_ABSOLUTE`)
-- contain no `..` segment (`COMMAND_FILE_TRAVERSAL`)
-- resolve — via its **real** path, so a symlink cannot escape by looking
-  innocent — inside the repository (`COMMAND_FILE_OUTSIDE_REPOSITORY`)
-- be a regular file (`COMMAND_FILE_NOT_A_FILE`)
-- be committed (`COMMAND_FILE_NOT_TRACKED`)
+After repository-relative path validation, the entry at `HEAD:<path>` must be a
+regular committed blob:
 
-The tracking check fails closed when git is unavailable: a dispatched command
-must be one the repository actually carries, and "cannot tell" is not "yes".
+- repository-relative, not absolute (`COMMAND_FILE_ABSOLUTE`)
+- no `..` segment (`COMMAND_FILE_TRAVERSAL`)
+- present in the HEAD tree (`COMMAND_FILE_NOT_TRACKED`)
+- mode `100644`/`100755`, so not a directory (`COMMAND_FILE_NOT_A_FILE`), a
+  symlink (`COMMAND_FILE_SYMLINK`) or a submodule
+
+Resolving inside the HEAD tree removes a whole class of path attack: a blob
+there cannot be an absolute path or a symlink target outside the repository,
+because it is not a filesystem lookup at all. Git is invoked with an argv array
+and `--`, never through a shell, and the check fails closed when git is
+unavailable.
 
 Nothing about the command is printed until it has parsed as JSON and passed the
 schema. The operation record is written from the validated value, so neither an

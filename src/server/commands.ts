@@ -12,6 +12,7 @@ import { fetchGeneratedArtifact, createGeneratedArtifactFetcher, type GeneratedA
 import { executePageCommand } from './page-composition/mutations';
 import { executeProductCommand } from './product/mutations';
 import { commandDigest } from './control-plane/digest';
+import { evaluateReplay } from './control-plane/replay';
 import { contractVersion } from './control-plane/contracts';
 import { RULE_VERSION } from './rule-version';
 
@@ -22,7 +23,20 @@ async function recordJob(commandId:string, command:string, status:string, error?
   await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,error_type,error_code,error_message,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,error_type=excluded.error_type,error_code=excluded.error_code,error_message=excluded.error_message,finished_at=excluded.finished_at`).bind(uuid(),commandId,command,status,1,e?.type||null,e?.code||null,message,new Date().toISOString(),new Date().toISOString()).run();
 }
 
-async function existingJob(commandId:string) { return await env.DB.prepare(`SELECT status,result_json FROM jobs WHERE command_id=? LIMIT 1`).bind(commandId).first<{status:string;result_json:string|null}>(); }
+async function existingJob(commandId:string) { return await env.DB.prepare(`SELECT status,result_json,command_digest FROM jobs WHERE command_id=? LIMIT 1`).bind(commandId).first<{status:string;result_json:string|null;command_digest:string|null}>(); }
+
+/**
+ * Record which command this id is executing, before the mutation runs.
+ *
+ * Success rows are written by each command's own transaction in several places;
+ * none of them touch command_digest on conflict, so claiming it here means
+ * every job created from this point carries the digest of the command that
+ * produced it, without threading it through every mutation path.
+ */
+async function claimCommandDigest(commandId:string, command:string, digest:string) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,command_digest,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET command_digest=excluded.command_digest,command_type=excluded.command_type`).bind(uuid(),commandId,command,'running',1,digest,now).run();
+}
 
 type ContentRow = { id:string; content_type:'news'|'article'; slug:string; title:string; excerpt:string|null; blocks_json:string; status:string; published_at:string|null; starts_at:string|null; ends_at:string|null; seo_title:string|null; seo_description:string|null; version:number; };
 export type TrustedAuthorization = { actor:string; scopes:string[] };
@@ -242,7 +256,8 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
   // All mutation commands cross the same trusted authorization boundary before
   // idempotency lookup, payload validation, provider fetch, or storage work.
   authorizeMutation(runtime, cmd.command);
-  // Idempotency is resolved before the contract gates, not after. A commandId
+  // Idempotency is resolved before the contract gates, not after -- but it is
+  // keyed by the complete command, not by its id. A commandId
   // that already succeeded identifies a completed mutation, and re-answering it
   // must not depend on the caller still satisfying gates that describe how a
   // *new* command is admitted: after the first success the state has moved on,
@@ -253,10 +268,15 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
   // assertRuleVersion has always sat behind this line for the same reason; the
   // preflight binding now does too. Authorization stays in front: a caller
   // without the scope is refused whether or not the command already ran.
-  const prior = await existingJob(cmd.commandId);
-  if (prior?.status === 'success') return { success:true, commandId:cmd.commandId, idempotent:true, result: prior.result_json ? JSON.parse(prior.result_json) : null };
+  // The digest of the complete immutable command, with the preflight receipt
+  // excluded -- the same canonicalization the preflight receipt attests.
+  const digest = await commandDigest(cmd);
+  const replay = evaluateReplay(cmd.commandId, digest, await existingJob(cmd.commandId));
+  if (replay.replay) return { success:true, commandId:cmd.commandId, idempotent:true, result: replay.result };
+
   await verifyPreflightBinding(cmd);
   assertRuleVersion(cmd.context.ruleVersion);
+  await claimCommandDigest(cmd.commandId, cmd.command, digest);
 
   try {
     if (cmd.command === 'create_taxonomy_term') {

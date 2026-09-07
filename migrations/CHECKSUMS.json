@@ -5,6 +5,7 @@
     "0002_add_content_type.sql": "sha256:d14077c7e99b6c57f786736c92c08542d095887e0f00b4bdb4f6f7c4b8359659",
     "0003_asset_engine.sql": "sha256:95b63790c42d5161249cb1cb3f511d7434635a7aec3fc72bf15eed44cd51b0a9",
     "0004_page_composition.sql": "sha256:8d67ceb9253e8f64a806521f21e0a370c297d20ed36b558e1f1864e78fc5faa0",
-    "0005_unified_content_projection.sql": "sha256:0d7c6845efca01c4c4fba104123391b4b0f98bafc6f7b4c0f37dfb1b29bb9de0"
+    "0005_unified_content_projection.sql": "sha256:0d7c6845efca01c4c4fba104123391b4b0f98bafc6f7b4c0f37dfb1b29bb9de0",
+    "0006_job_command_digest.sql": "sha256:8efb6d3a8c8bda2723c71dd860e4d4f25dc2ec2c68f3f7e8ea33734e00112749"
   }
 }

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { repoRoot } from '../scripts/repo-root.mjs';
 import { loadRuleVersion } from '../scripts/load-command-contracts.mjs';
+import { canonicalCommandDigest as digestOf } from '../scripts/dispatch-command.mjs';
 import {
   validateCommand,
   preflightCommand,
@@ -46,7 +47,7 @@ function installation({ readiness, preflight, jobs = new Map(), loseNextResponse
       const commandId = decodeURIComponent(lookup[1]);
       const job = jobs.get(commandId);
       return json(200, job
-        ? { success: true, commandId, known: true, status: job.status, finishedAt: job.finishedAt, result: job.status === 'success' ? job.result : null }
+        ? { success: true, commandId, known: true, status: job.status, commandDigest: job.commandDigest ?? null, finishedAt: job.finishedAt, result: job.status === 'success' ? job.result : null }
         : { success: true, commandId, known: false, status: null });
     }
 
@@ -63,16 +64,18 @@ function installation({ readiness, preflight, jobs = new Map(), loseNextResponse
     if (pathname === DISPATCH_PATH) {
       const command = JSON.parse(init.body);
       const existing = jobs.get(command.commandId);
-      // Idempotency is resolved before any contract gate, exactly as the Worker
-      // does, so a replay never reaches the mutation.
+      // Mirrors the Worker: idempotency is keyed by the complete command, so a
+      // reused id with a different digest is refused rather than answered.
       if (existing?.status === 'success') {
+        const submitted = await digestOf(command);
+        if (!existing.commandDigest) return json(409, { success: false, error: { code: 'COMMAND_DIGEST_UNVERIFIABLE', message: 'stored job predates digests' } });
+        if (existing.commandDigest !== submitted) return json(409, { success: false, error: { code: 'COMMAND_ID_REUSED', message: 'commandId already succeeded for a different command' } });
         return json(200, { success: true, commandId: command.commandId, idempotent: true, result: existing.result });
       }
       mutations += 1;
       const result = { id: `content_${mutations}`, version: 1 };
-      jobs.set(command.commandId, { status: 'success', result, finishedAt: new Date().toISOString() });
+      jobs.set(command.commandId, { status: 'success', result, commandDigest: await digestOf(command), finishedAt: new Date().toISOString() });
       if (lose) {
-        // The mutation committed; the caller never learns the outcome.
         lose = false;
         throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
       }
@@ -116,11 +119,27 @@ test('a shipped example passes the local gates', async () => {
   assert.equal(command.command, 'create_news');
 });
 
-test('an invalid envelope is rejected before anything is sent', async () => {
+test('a command that cannot be addressed is rejected before anything is sent', async () => {
   const site = installation();
   const command = await example('create-news.json');
   delete command.commandId;
-  await assertBlocked(site, () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'schema' && e.code === 'ENVELOPE_INVALID');
+  await assertBlocked(site, () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'schema' && e.code === 'COMMAND_ID_INVALID');
+});
+
+// An envelope that cannot be canonicalized cannot be digested, and without a
+// digest it cannot be matched against a stored job -- so it is refused before
+// the lookup rather than being admitted on its id alone.
+test('an envelope invalid beyond its addressing fields is refused before lookup', async () => {
+  const site = installation({ preflight: PREFLIGHT_OK });
+  const command = await example('create-news.json');
+  command.schemaVersion = 99;
+  await assertBlocked(site, async () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'schema' && e.code === 'COMMAND_NOT_CANONICALIZABLE');
+});
+
+test('the full envelope schema still rejects a malformed envelope', async () => {
+  const command = await example('create-news.json');
+  command.schemaVersion = 99;
+  await assert.rejects(() => validateCommand(command), (e) => e.stage === 'schema' && e.code === 'ENVELOPE_INVALID');
 });
 
 test('an invalid payload is rejected before anything is sent', async () => {
@@ -157,9 +176,9 @@ test('a command with no target site is refused rather than treated as a wildcard
   await assertBlocked(
     site,
     () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
-    // Now mandatory in the authoritative envelope, so an absent value is caught
-    // one gate earlier than the installation-equality check.
-    (e) => e.stage === 'schema' && e.code === 'ENVELOPE_INVALID'
+    // Required both by the authoritative envelope and by the minimal pre-lookup
+    // validation, so an unaddressed command never reaches the installation.
+    (e) => e.stage === 'target-site' && e.code === 'TARGET_SITE_REQUIRED'
   );
 });
 
@@ -306,12 +325,10 @@ test('a lost dispatch response is recoverable and mutates only once', async () =
   const site = installation({ preflight: PREFLIGHT_OK, loseNextResponse: true });
   const command = await example('create-news.json');
 
-  // First run: the Worker applies the mutation, then the response is lost.
   await assert.rejects(() => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }));
   assert.equal(site.mutations, 1, 'the first dispatch must have mutated');
   const original = site.jobs.get(command.commandId).result;
 
-  // Second run: same commandId, and by now expectedVersion would be stale.
   const replay = await runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
 
   assert.equal(replay.replay, true);
@@ -320,18 +337,109 @@ test('a lost dispatch response is recoverable and mutates only once', async () =
   assert.equal(site.mutations, 1, 'the retry must not mutate a second time');
 });
 
-// The recovery must not come from skipping preflight generally: it is the
-// recorded success that authorises it.
+test('same id and identical digest returns the original result', async () => {
+  const command = await example('create-news.json');
+  const site = installation({
+    jobs: new Map([[command.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: await digestOf(command), finishedAt: '2026-09-07T00:00:00Z' }]])
+  });
+  const result = await runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
+
+  assert.equal(result.replay, true);
+  assert.deepEqual(result.result.result, { id: 'content_1' });
+  assert.equal(site.mutations, 0, 'a replay must not mutate');
+});
+
+// Reusing a successful id for different work must not be answered from the old
+// result: that would silently skip the mutation just requested.
+test('same id with a different command type is refused', async () => {
+  const original = await example('create-news.json');
+  const reused = await example('replace-content-image.json');
+  reused.commandId = original.commandId;
+  reused.payload.contentId = 'content_1';
+  reused.payload.reference.providerAssetId = 'drive-file-1';
+
+  const site = installation({
+    readiness: READY,
+    preflight: PREFLIGHT_OK,
+    jobs: new Map([[original.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: await digestOf(original) }]])
+  });
+
+  await assertBlocked(site, async () => runDispatch({ command: reused, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'idempotency' && e.code === 'COMMAND_ID_REUSED');
+});
+
+test('same id and same type but a different payload is refused', async () => {
+  const original = await example('create-news.json');
+  const altered = await example('create-news.json');
+  altered.payload.title = 'A different headline entirely';
+
+  const site = installation({
+    preflight: PREFLIGHT_OK,
+    jobs: new Map([[original.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: await digestOf(original) }]])
+  });
+
+  await assertBlocked(site, async () => runDispatch({ command: altered, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.code === 'COMMAND_ID_REUSED');
+});
+
+test('same id with a different target site is refused before lookup', async () => {
+  const original = await example('create-news.json');
+  const altered = await example('create-news.json');
+  altered.context.targetSite = 'another-installation';
+
+  const site = installation({ jobs: new Map([[original.commandId, { status: 'success', result: {}, commandDigest: await digestOf(original) }]]) });
+  await assertBlocked(site, async () => runDispatch({ command: altered, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'target-site');
+});
+
+// A command is immutable: it cannot be reissued under a newer rule version
+// without becoming a different command. Recovering one must therefore not
+// require it to satisfy today's admission rules.
+test('a successful old-rule command replays after a rule-version change', async () => {
+  const command = await example('create-news.json');
+  command.context.ruleVersion = '0.0.9-previous';
+
+  const site = installation({
+    jobs: new Map([[command.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: await digestOf(command), finishedAt: '2026-09-06T00:00:00Z' }]])
+  });
+  const result = await runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
+
+  assert.equal(result.replay, true);
+  assert.deepEqual(result.result.result, { id: 'content_1' });
+  assert.equal(site.mutations, 0);
+});
+
+// ...but only because it already succeeded. There is no general stale-rule
+// bypass: an unknown id under an old rule version is new work and is refused.
+test('an unknown old-rule command is still refused', async () => {
+  const command = await example('create-news.json');
+  command.commandId = 'unknown-old-rule-command-001';
+  command.context.ruleVersion = '0.0.9-previous';
+
+  const site = installation({ preflight: PREFLIGHT_OK });
+  await assertBlocked(site, async () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'rule-version' && e.code === 'RULE_VERSION_CONFLICT');
+});
+
+// A job written before digests were stored cannot be shown to describe this
+// command, and "cannot tell" is not "matches".
+test('a legacy job with no stored digest fails closed', async () => {
+  const command = await example('create-news.json');
+  const site = installation({
+    preflight: PREFLIGHT_OK,
+    jobs: new Map([[command.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: null }]])
+  });
+
+  await assertBlocked(site, async () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }), (e) => e.stage === 'idempotency' && e.code === 'COMMAND_DIGEST_UNVERIFIABLE');
+});
+
 test('a stale expectedVersion does not block a replay of a completed command', async () => {
+  const command = await example('create-news.json');
   const site = installation({
     preflight: json(409, { success: false, error: { code: 'CONTENT_VERSION_CONFLICT', message: 'stale' } }),
-    jobs: new Map([['example-create-news-001', { status: 'success', result: { id: 'content_1' }, finishedAt: '2026-09-07T00:00:00Z' }]])
+    jobs: new Map([[command.commandId, { status: 'success', result: { id: 'content_1' }, commandDigest: await digestOf(command), finishedAt: '2026-09-07T00:00:00Z' }]])
   });
-  const result = await runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
+  const result = await runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
 
   assert.equal(result.replay, true);
   assert.ok(!site.calls.some((call) => call.pathname === '/api/control/preflight/'), 'a completed command must not be re-preflighted');
-  assert.equal(site.mutations, 0, 'replaying a completed command must not mutate');
+  assert.equal(site.mutations, 0);
 });
 
 test('an unseen commandId still passes every gate: no general preflight bypass', async () => {
@@ -345,7 +453,7 @@ test('an unseen commandId still passes every gate: no general preflight bypass',
 test('a previously failed commandId is re-gated rather than replayed', async () => {
   const site = installation({
     preflight: PREFLIGHT_OK,
-    jobs: new Map([['example-create-news-001', { status: 'failed', result: null }]])
+    jobs: new Map([['example-create-news-001', { status: 'failed', result: null, commandDigest: null }]])
   });
   const result = await runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl: site.fetchImpl, log: () => {} });
 
@@ -354,25 +462,23 @@ test('a previously failed commandId is re-gated rather than replayed', async () 
 });
 
 test('an unreadable command lookup fails closed', async () => {
-  const site = installation();
   await assert.rejects(
     () => lookupCommand({ commandId: 'whatever-id', ...base, fetchImpl: async () => json(500, { success: false, error: { code: 'CONTROL_READ_FAILED', message: 'db down' } }) }),
     (e) => e.stage === 'idempotency' && e.code === 'CONTROL_READ_FAILED'
   );
-  assert.equal(site.reachedDispatch(), false);
 });
 
 test('a replay the Worker does not answer idempotently is stopped', async () => {
-  const jobs = new Map([['example-create-news-001', { status: 'success', result: { id: 'content_1' } }]]);
-  const fetchImpl = async (url, init) => {
+  const command = await example('create-news.json');
+  const digest = await digestOf(command);
+  const fetchImpl = async (url) => {
     const pathname = new URL(url).pathname;
-    if (pathname.startsWith('/api/control/commands/')) return json(200, { success: true, known: true, status: 'success', result: { id: 'content_1' } });
+    if (pathname.startsWith('/api/control/commands/')) return json(200, { success: true, known: true, status: 'success', commandDigest: digest, result: { id: 'content_1' } });
     if (pathname === DISPATCH_PATH) return json(200, { success: true, idempotent: false, result: { id: 'content_2' } });
     throw new Error(`unexpected ${pathname}`);
   };
-  void jobs;
   await assert.rejects(
-    async () => runDispatch({ command: await example('create-news.json'), ...base }, { fetchImpl, log: () => {} }),
+    () => runDispatch({ command, ...base }, { fetchImpl, log: () => {} }),
     (e) => e.stage === 'idempotency' && e.code === 'REPLAY_NOT_IDEMPOTENT'
   );
 });
@@ -454,7 +560,7 @@ test('ids the lookup route cannot address are refused at gate 1', async () => {
     await assertBlocked(
       site,
       async () => runDispatch({ command, ...base }, { fetchImpl: site.fetchImpl, log: () => {} }),
-      (e) => e.stage === 'schema' && e.code === 'ENVELOPE_INVALID'
+      (e) => e.stage === 'schema' && e.code === 'COMMAND_ID_INVALID'
     );
     assert.deepEqual(site.calls, [], `${label}: a malformed commandId must be rejected before any request`);
   }

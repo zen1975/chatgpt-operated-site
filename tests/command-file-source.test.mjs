@@ -28,10 +28,11 @@ test.after(async () => {
   if (scratch) await rm(scratch, { recursive: true, force: true });
 });
 
-test('a committed repository file resolves', withGit, async () => {
+test('a committed repository file resolves to its blob', withGit, async () => {
   const resolved = await resolveCommandFile(TRACKED);
   assert.equal(resolved.relativePath, TRACKED);
-  assert.ok(resolved.absolutePath.startsWith(await (await import('node:fs/promises')).realpath(repoRoot)));
+  assert.match(resolved.blobSha, /^[0-9a-f]{40,64}$/);
+  assert.equal(JSON.parse(resolved.contents).command, 'create_news');
 });
 
 test('an absolute path is refused', withGit, async () => {
@@ -54,6 +55,8 @@ test('a traversal path is refused', withGit, async () => {
 
 // A symlink is the case a naive string check misses: the path looks
 // repository-relative and contains no "..".
+// An uncommitted symlink is not in the HEAD tree at all, so it is refused as
+// untracked -- the blob is never resolved and the target is never opened.
 test('a symlink escaping the repository is refused', withGit, async () => {
   const link = path.join(repoRoot, 'escape-probe.json');
   await rm(link, { force: true });
@@ -61,19 +64,37 @@ test('a symlink escaping the repository is refused', withGit, async () => {
   try {
     await assert.rejects(
       () => resolveCommandFile('escape-probe.json'),
-      (e) => e.code === 'COMMAND_FILE_OUTSIDE_REPOSITORY'
+      (e) => e.code === 'COMMAND_FILE_NOT_TRACKED'
     );
   } finally {
     await rm(link, { force: true });
   }
 });
 
+// A committed symlink is in the tree, with mode 120000. Following it would read
+// whatever it points at, so the mode is checked rather than assumed.
+test('a committed symlink is refused by its tree mode', withGit, async () => {
+  const gitImpl = async (_bin, args) => {
+    if (args[0] === 'ls-tree') return { stdout: `120000 blob ${'a'.repeat(40)}\tlink.json\0` };
+    throw new Error('cat-file must not be reached for a symlink');
+  };
+  await assert.rejects(() => resolveCommandFile('link.json', { gitImpl }), (e) => e.code === 'COMMAND_FILE_SYMLINK');
+});
+
 test('a directory is refused', withGit, async () => {
   await assert.rejects(() => resolveCommandFile('examples/commands'), (e) => e.code === 'COMMAND_FILE_NOT_A_FILE');
 });
 
+test('a submodule entry is refused', async () => {
+  const gitImpl = async (_bin, args) => {
+    if (args[0] === 'ls-tree') return { stdout: `160000 commit ${'a'.repeat(40)}\tvendor\0` };
+    throw new Error('cat-file must not be reached');
+  };
+  await assert.rejects(() => resolveCommandFile('vendor', { gitImpl }), (e) => e.code === 'COMMAND_FILE_NOT_A_FILE');
+});
+
 test('a missing file is refused', withGit, async () => {
-  await assert.rejects(() => resolveCommandFile('examples/commands/does-not-exist.json'), (e) => e.code === 'COMMAND_FILE_NOT_FOUND');
+  await assert.rejects(() => resolveCommandFile('examples/commands/does-not-exist.json'), (e) => e.code === 'COMMAND_FILE_NOT_TRACKED');
 });
 
 // An uncommitted file in the working tree is not part of the distribution, so
@@ -110,7 +131,7 @@ test('repository-external content is neither read nor printed', withGit, async (
         { commandFile: 'escape-probe-2.json', endpoint: 'https://worker.example.com', controlSecret: 'c', commandSecret: 'd' },
         { log: (line) => printed.push(String(line)), fetchImpl: async (url) => { requests.push(url); throw new Error('must not be reached'); } }
       ),
-      (e) => e.stage === 'command-source' && e.code === 'COMMAND_FILE_OUTSIDE_REPOSITORY'
+      (e) => e.stage === 'command-source' && e.code === 'COMMAND_FILE_NOT_TRACKED'
     );
 
     const output = printed.join('\n');
@@ -158,4 +179,49 @@ test('a validated command is printed as the operation record', withGit, async ()
   const output = printed.join('\n');
   assert.ok(output.includes('--- validated command ---'));
   assert.ok(output.includes('"create_news"'));
+});
+
+// "Tracked" is not "unmodified". A committed command file edited in the working
+// tree must dispatch the bytes the repository carries, not the local edit --
+// and the edit must never appear in the operation record either.
+test('a locally modified tracked file dispatches the committed blob', withGit, async () => {
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const target = path.join(repoRoot, TRACKED);
+  const pristine = await readFile(target, 'utf8');
+  const tampered = JSON.parse(pristine);
+  tampered.payload.title = SECRET;
+  tampered.payload.excerpt = SECRET;
+
+  await writeFile(target, JSON.stringify(tampered, null, 2), 'utf8');
+  try {
+    // The resolver reads the blob, so the local edit is invisible to it.
+    const resolved = await resolveCommandFile(TRACKED);
+    assert.equal(JSON.parse(resolved.contents).payload.title, JSON.parse(pristine).payload.title);
+    assert.ok(!resolved.contents.includes(SECRET), 'the committed blob must not contain the local edit');
+
+    const printed = [];
+    const dispatched = [];
+    await runDispatch(
+      { commandFile: TRACKED, endpoint: 'https://worker.example.com', controlSecret: 'c', commandSecret: 'd' },
+      {
+        log: (line) => printed.push(String(line)),
+        fetchImpl: async (url, init) => {
+          const pathname = new URL(url).pathname;
+          if (pathname.startsWith('/api/control/commands/')) return { ok: true, status: 200, json: async () => ({ success: true, known: false, status: null }) };
+          if (pathname === '/api/control/preflight/') return { ok: true, status: 200, json: async () => ({ success: true, preflight: { commandDigest: `sha256:${'a'.repeat(64)}`, contractVersion: 'v1', sideEffects: false } }) };
+          if (pathname === '/api/internal/commands') {
+            dispatched.push(init.body);
+            return { ok: true, status: 200, json: async () => ({ success: true, idempotent: false, result: {} }) };
+          }
+          throw new Error(`unexpected ${pathname}`);
+        }
+      }
+    );
+
+    assert.equal(dispatched.length, 1);
+    assert.ok(!dispatched[0].includes(SECRET), 'the modified working-tree bytes must never be dispatched');
+    assert.ok(!printed.join('\n').includes(SECRET), 'the modified working-tree bytes must never be printed');
+  } finally {
+    await writeFile(target, pristine, 'utf8');
+  }
 });
