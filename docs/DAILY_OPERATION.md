@@ -19,10 +19,12 @@ The client should not need to open GitHub, Cloudflare, D1, R2, or the Asset Inta
 
 ## What happens underneath
 
+The included reference path is:
+
 ```text
 Client request
   -> ChatGPT interprets intent
-  -> supported Command is prepared
+  -> the installation's ChatGPT-facing integration prepares a supported Command
   -> GitHub receives an immutable command record
   -> GitHub Actions validates and dispatches it
   -> Cloudflare Worker performs the controlled mutation
@@ -30,7 +32,15 @@ Client request
   -> Astro renders the resulting site state
 ```
 
-The exact command payload must match the current schema in `src/server/command-schema.ts` and the relevant capability policy.
+The exact command payload must match the current schema in `src/server/command-schema.ts` and the relevant capability policy. See `DISPATCH_REFERENCE.md` for the included GitHub Actions path.
+
+## Installation boundary
+
+This repository implements the controlled Worker endpoints and a reference GitHub Actions adapter. It does not automatically connect a ChatGPT account to an installation.
+
+Before client handoff, the installer must configure a ChatGPT-facing integration that can prepare the validated Command and hand it to the selected adapter using operator-owned credentials. For the included path, that integration creates a new immutable command record in GitHub and invokes **Dispatch Site Command**. An authenticated command client may instead replace the Actions adapter and use `/api/v1/commands`, as listed in `CONFIGURATION.md`.
+
+Choose one canonical daily-operation path per installation. Do not run GitHub Actions and direct REST as competing mutation paths. Any replacement must preserve the signed Worker contracts, schema and capability validation, expected-version checks, and fail-closed behavior.
 
 ## Images
 
