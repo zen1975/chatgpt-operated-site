@@ -52,6 +52,37 @@ current schema
 
 Examples demonstrate a route; they do not override the current schema.
 
+## Distribution scope
+
+This repository is read before it is run. An implementer's cost is the amount of
+code they must understand before they can rebuild the structure themselves, so
+the limiting rule is what this distribution refuses to carry, not what it could
+usefully contain.
+
+Out of scope here, and named as implementer hardening in
+`docs/DISPATCH_REFERENCE.md`:
+
+- lease acquisition, stale-job takeover, and transactional fencing
+- replay machinery beyond the idempotency the command contract already states
+- signed attestation layered on top of the command signature
+- command classification or capability-derivation layers
+- mutation testing, and test suites that grow faster than the code they cover
+
+None of these are wrong. They are the work a live installation needs and a
+baseline does not, and a distribution that carries them stops being readable as
+a starting point.
+
+Two rules follow.
+
+**Judge a review finding by scope before correctness.** A finding can be
+entirely correct and still belong outside this distribution. Record a
+correct-but-out-of-scope finding as implementer hardening; do not implement it
+here. Accepting every correct finding is precisely how a baseline stops being
+one, because no single step ever looks like the wrong decision.
+
+**Keep one path.** Where the repository already shows a way to do something, do
+not add a second. A new mechanism replaces the old one or is not added.
+
 ## Repository safety
 
 Never infer repository identity from a similar name, previous conversation, or recent repository. Confirm the active repository before a write.

@@ -99,6 +99,8 @@ The baseline is considered useful when a clean clone can install, `npm run verif
 
 It is **not** intended to be a hosted service, a finished client website, or a promise that every downstream Cloudflare/Google/GitHub account is already provisioned. Real client provisioning and end-to-end acceptance belong to the implementer's installation and handoff process.
 
+It is also not a hardened control plane. Lease recovery, transactional fencing, signed attestation, and similar production concerns are named in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) as the implementer's work and deliberately left out, because a baseline that carries them is no longer readable as one. [`AGENTS.md`](AGENTS.md) states the scope rule that keeps it that way.
+
 ## Documentation
 
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
