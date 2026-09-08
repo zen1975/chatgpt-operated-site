@@ -69,3 +69,29 @@ validated payload rather than trusting that flag.
   actual ChatGPT-to-site acceptance run remain release acceptance steps.
 - Other orchestrators may replace Actions if they preserve the same signed
   Worker contracts and fail closed on validation or preflight errors.
+
+## Not included: implementer hardening
+
+The adapter is deliberately small. A live installation with concurrent
+operators, unreliable networks, or an untrusted operator population needs more
+than this, and that work belongs to the implementer rather than to the
+distribution:
+
+- **Lease acquisition and stale-job takeover.** A crashed attempt leaves a job
+  in `running`. Recovering it safely requires an owner token carried through the
+  invocation and a fence that makes a superseded attempt's write fail, not
+  merely match zero rows.
+- **Transactional fencing of the domain mutation.** Optimistic version columns
+  detect a conflict at the row; a fence makes the surrounding statement sequence
+  fail so the whole batch rolls back.
+- **Signed attestation.** Preflight receipts here are short-lived evidence
+  passed between two trusted steps of one workflow. An installation that lets
+  callers supply their own readiness evidence needs that evidence signed with a
+  secret distinct from the command secret, and bound to the command digest,
+  contract version, site, provider, and validity window.
+- **Provider-side rate limiting and quota handling** beyond failing closed.
+- **Operator authorization** finer-grained than the environment's reviewers.
+
+Each is a legitimate production concern. None of them are required to
+understand or reproduce the control path, which is what this repository is for.
+See `AGENTS.md`, "Distribution scope".
