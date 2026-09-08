@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { CommandEnvelope, CreateAssetPayload, ImportWordPressAssetPayload, CreateNewsPayload, CreateTaxonomyTermPayload, CreateTimedContentPayload, UpdateContentPayload, ArchiveContentPayload, RollbackContentPayload, ScheduleContentPayload, AttachAssetPayload, ReplaceAssetPayload, UpdateSeoPayload, type ReplaceAssetCommand } from './command-schema';
 import { slugify, uuid } from './util';
 import { CommandError } from './core/errors';
+import { assertCommandTargetsThisSite } from './site-identity';
 import { resolvePermalink, resolveSeo, resolveTemplate, validateTaxonomyTerms } from './core/resolvers';
 import { ingestAsset, compensateUnassociatedAsset } from './core/assets';
 import { fetchGoogleDriveAsset, refreshGoogleDriveAccessToken } from './adapters/assets/google-drive';
@@ -241,6 +242,9 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
   // All mutation commands cross the same trusted authorization boundary before
   // idempotency lookup, payload validation, provider fetch, or storage work.
   authorizeMutation(runtime, cmd.command);
+  // External adapters can reject obvious mistakes early, but the Worker owns
+  // the installation boundary for every ingress, including direct REST calls.
+  assertCommandTargetsThisSite(cmd.context.targetSite);
   await verifyPreflightBinding(cmd);
   const prior = await existingJob(cmd.commandId);
   if (prior?.status === 'success') return { success:true, commandId:cmd.commandId, idempotent:true, result: prior.result_json ? JSON.parse(prior.result_json) : null };

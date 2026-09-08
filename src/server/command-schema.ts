@@ -11,7 +11,7 @@ export const CommandEnvelope = z.object({
   issuedAt: z.string().datetime(),
   context: z.object({
     ruleVersion:z.string(),
-    targetSite:z.string().optional(),
+    targetSite:z.string().min(1).max(200),
     requiresAssetIntake: z.boolean().optional(),
     preflight: z.object({ commandDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), contractVersion: z.string().min(1).max(200) }).strict().optional()
   }).strict(),

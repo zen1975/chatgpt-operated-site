@@ -36,17 +36,16 @@ The exact command payload must match the current schema in `src/server/command-s
 
 For an operation that needs a new image, the client can attach the image in the ChatGPT interaction supported by the configured installation.
 
-The operation command should mark:
+A command that introduces a new provider-backed asset may keep
+`context.requiresAssetIntake: true` as operation metadata. The reference
+dispatch adapter derives the actual readiness requirement from the validated
+provider reference rather than trusting that flag. A command that uses an
+existing canonical `assetId` does not need Asset Intake readiness.
 
-```json
-{
-  "context": {
-    "requiresAssetIntake": true
-  }
-}
-```
-
-The configured Asset Intake layer is installer infrastructure, not a second client interface. The authenticated readiness check belongs to the GitHub Actions dispatch gate.
+The configured Asset Intake layer is installer infrastructure, not a second
+client interface. GitHub Actions is the included reference adapter; another
+orchestrator may replace it if the signed Worker contracts and fail-closed
+validation are preserved.
 
 ## Version and validation failures
 

@@ -1,0 +1,51 @@
+name: Dispatch Site Command
+
+on:
+  workflow_dispatch:
+    inputs:
+      command_file:
+        description: Repository-relative path to a committed command JSON file
+        required: true
+        default: examples/commands/create-news.json
+        type: string
+      dry_run:
+        description: Validate, check readiness, and preflight without mutation
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-command-${{ inputs.command_file }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: site-operations
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate, preflight, and dispatch
+        env:
+          SITE_ENDPOINT: ${{ vars.SITE_ENDPOINT }}
+          CONTROL_READ_HMAC_SECRET: ${{ secrets.CONTROL_READ_HMAC_SECRET }}
+          COMMAND_HMAC_SECRET: ${{ secrets.COMMAND_HMAC_SECRET }}
+          COMMAND_FILE: ${{ inputs.command_file }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--command-file "$COMMAND_FILE")
+          if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          node scripts/dispatch-command.mjs "${args[@]}"

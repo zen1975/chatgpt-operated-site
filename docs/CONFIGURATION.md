@@ -34,7 +34,7 @@ Declared under `vars` in `wrangler.jsonc`.
 | `SITE_TIMEZONE` | Timezone applied to scheduling and timed-content windows. |
 | `COMMAND_TRUSTED_ACTOR` | Actor name recorded for commands arriving on the trusted ingress. |
 | `COMMAND_TRUSTED_SCOPES` | Comma-separated mutation scopes granted to the trusted ingress. A command whose scope is absent is rejected before any payload validation or storage work. |
-| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. |
+| `CONTROL_READ_SCOPES` | Comma-separated read scopes granted to the read control plane. The reference dispatch adapter needs `intake:read,command:preflight`. |
 | `WORDPRESS_ASSET_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `import_wordpress_asset`. Not shipped in `wrangler.jsonc`: the command fails closed with `WORDPRESS_ASSET_ORIGIN_ALLOWLIST_REQUIRED` until an installation that wants WordPress import adds it. Add it to `vars` with the origins to import from, for example `https://legacy.example.com`. |
 
 Scope names are enumerated by `MUTATION_SCOPES` in `src/server/commands.ts`.
@@ -65,6 +65,14 @@ credential source.
 
 `GENERATED_ARTIFACT_ORIGIN` and `GENERATED_ARTIFACT_TOKEN` configure the
 generated-artifact intake adapter and are optional.
+
+## GitHub Actions reference adapter
+
+The optional reference workflow uses a protected GitHub environment named
+`site-operations`. Set `SITE_ENDPOINT` as an environment variable and provision
+`CONTROL_READ_HMAC_SECRET` and `COMMAND_HMAC_SECRET` as environment secrets.
+They must correspond to the same Worker installation. See
+`docs/DISPATCH_REFERENCE.md` for the single-file golden path and its boundaries.
 
 ## Keeping this page complete
 
