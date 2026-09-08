@@ -40,7 +40,7 @@ Start with:
 
 Replace placeholder values with installation-specific configuration. Keep secrets in the appropriate Cloudflare/GitHub secret stores rather than source control.
 
-`docs/CONFIGURATION.md` is the complete reference for every binding, plaintext variable, and secret the Worker reads, and for which ingress endpoints exist and how each one authenticates.
+`docs/CONFIGURATION.md` is the complete reference for every binding, plaintext variable, and secret the Worker reads, and for which ingress endpoints exist and how each one authenticates. If the installation enables Google Drive Asset Intake, complete `docs/GOOGLE_DRIVE_ASSET_INTAKE.md` before testing image-bearing operations.
 
 ## Replace the reference website
 
