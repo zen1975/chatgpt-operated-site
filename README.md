@@ -15,7 +15,7 @@ npm ci
 npm run verify   # build + contract checks
 ```
 
-Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance.
+Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance. The minimal GitHub Actions golden path is documented in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md).
 
 ## What is included
 
@@ -104,6 +104,7 @@ It is **not** intended to be a hosted service, a finished client website, or a p
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
+- [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) — minimal, replaceable GitHub Actions dispatch adapter
 - [`docs/EXTENDING_SITE_OPERATIONS.md`](docs/EXTENDING_SITE_OPERATIONS.md) — adding new controlled site operations
 - [`AGENTS.md`](AGENTS.md) — operating contract for coding/operation agents
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development setup and what the contract checks enforce
@@ -114,6 +115,8 @@ It is **not** intended to be a hosted service, a finished client website, or a p
 The **implementer baseline is assembled and continuously verified**. Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
 
 The repository remains private until the owner chooses to publish it. Making it public does not require proving every possible client deployment first; each real installation should still complete its own provisioning and end-to-end acceptance before client handoff.
+
+The dispatch adapter in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) is a reference implementation of the golden path, not production acceptance evidence. Hardening it for a live installation is the implementer's work.
 
 ## Licence
 
