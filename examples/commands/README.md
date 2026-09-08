@@ -4,10 +4,12 @@ These files are reference inputs for implementers. They show how a natural-langu
 
 Use them as patterns, not as production data.
 
+Every command must set `context.targetSite` to `site.id` from `config/site-profile.json`.
+
 ## Included examples
 
 - `create-news.json` — a minimal text/content operation.
-- `replace-content-image.json` — an image-bearing operation using the configured Asset Intake layer. Image-bearing commands set `context.requiresAssetIntake` to `true`; the authenticated readiness check belongs to the GitHub Actions dispatch gate, not to ChatGPT.
+- `replace-content-image.json` — an image-bearing operation using the configured Asset Intake layer. The authenticated dispatch adapter requires readiness when the validated payload contains a new provider reference. A canonical `assetId` skips that readiness check. `context.requiresAssetIntake` is optional compatibility metadata and is not the source of the readiness decision.
 - `update-page-hero.json` — a page-composition operation showing that the same controlled model can update a homepage hero or other site section, not only posts. Replace the page and section placeholders with identifiers from the target installation and use the current optimistic-lock versions.
 
 ## Extension pattern
@@ -23,4 +25,4 @@ To make another part of a site operable from ChatGPT:
 
 Do not expose unrestricted HTML, SQL, arbitrary JSON Patch, or raw application-state writes to ChatGPT.
 
-See `docs/EXTENDING_SITE_OPERATIONS.md` for the full implementation pattern.
+See `docs/EXTENDING_SITE_OPERATIONS.md` for the full implementation pattern and `docs/DISPATCH_REFERENCE.md` for the included dispatch path.
