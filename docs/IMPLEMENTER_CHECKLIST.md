@@ -19,13 +19,15 @@ Review and replace the example values in:
 - `config/page-capabilities.json`
 - `wrangler.jsonc`
 
-Provision the Cloudflare resources referenced by the installation and keep secrets out of the repository. See `docs/CONFIGURATION.md`.
+Provision the Cloudflare resources referenced by the installation and keep secrets out of the repository. See `docs/CONFIGURATION.md`. When Google Drive is the selected Asset Intake provider, complete `docs/GOOGLE_DRIVE_ASSET_INTAKE.md` with credentials and a folder owned by that installation.
 
 ## 3. Replace the reference website
 
 Treat the included Example Company site like a starter theme. Replace the branding, pages, layout, components, copy, and images with the real client site.
 
 The included design is not a framework restriction. It is only a readable reference implementation.
+
+Treat legacy-site migration, site-specific editorial or approval policies, and route-specific visual acceptance as client construction work. Add only what that installation needs; do not copy production/demo identifiers, credentials, routes, or acceptance evidence into the baseline.
 
 ## 4. Decide what the client may operate
 
