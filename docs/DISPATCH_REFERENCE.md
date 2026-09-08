@@ -7,10 +7,11 @@ possible integration architecture.
 ## Golden path
 
 1. Add a command JSON file that matches the current envelope and payload schema.
-2. Commit the file. The workflow reads the blob at `HEAD`, not a working-tree copy.
-3. Run **Dispatch Site Command** with its repository-relative path.
-4. Keep `dry_run` enabled for the first run.
-5. After the dry run succeeds, run it again with `dry_run` disabled.
+2. Set `context.targetSite` to `site.id` from `config/site-profile.json`.
+3. Commit the file. The workflow reads the blob at `HEAD`, not a working-tree copy.
+4. Run **Dispatch Site Command** with its repository-relative path.
+5. Keep `dry_run` enabled for the first run.
+6. After the dry run succeeds, run it again with `dry_run` disabled.
 
 The adapter performs a deliberately short sequence:
 
@@ -25,6 +26,22 @@ committed command
 The Worker remains authoritative for authentication, authorization, schema and
 capability rules, optimistic versioning, idempotency, and mutation. Replacing
 GitHub Actions must not remove those Worker checks.
+
+## ChatGPT handoff
+
+This workflow starts after a Command file has been committed. It does not by
+itself configure a ChatGPT account, prepare the file, or invoke the workflow.
+
+For client operation, the installer connects ChatGPT to one operator-owned
+integration that prepares a schema-valid Command, creates a new immutable record,
+and invokes **Dispatch Site Command**. That integration may be an Action, MCP
+server, bot, or another bounded adapter chosen by the installation.
+
+An authenticated command client may instead replace this Actions adapter and
+use `/api/v1/commands`. That endpoint is an alternative ingress, not a second
+daily-operation path to run alongside this workflow. Choose one canonical path
+per installation and preserve the signed Worker contracts and fail-closed
+checks.
 
 ## GitHub environment
 
