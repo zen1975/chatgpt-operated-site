@@ -15,7 +15,7 @@ npm ci
 npm run verify   # build + contract checks
 ```
 
-Then start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for installation and handoff guidance. The minimal GitHub Actions golden path is documented in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md).
+Then use [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) as the shortest path from this repository to a real client implementation. [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) contains the fuller installation and handoff guidance, and [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) documents the minimal GitHub Actions golden path.
 
 ## What is included
 
@@ -103,6 +103,7 @@ It is also not a hardened control plane. Lease recovery, transactional fencing, 
 
 ## Documentation
 
+- [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) — shortest path from fork to client implementation
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
