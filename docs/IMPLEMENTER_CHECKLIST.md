@@ -61,9 +61,13 @@ New functionality should extend the current command/handler model. Do not add a 
 
 ChatGPT is the operator. Application code owns the rules and reproducibility.
 
-## 7. Wire the GitHub-to-Worker dispatch
+## 7. Connect ChatGPT to the controlled dispatch
 
-Use `docs/DISPATCH_REFERENCE.md` as the minimal reference. Replace it when necessary for the installation, but preserve validation and the controlled Worker mutation boundary.
+Use `docs/DISPATCH_REFERENCE.md` as the minimal included GitHub-to-Worker reference. The workflow starts from a committed Command file; it does not automatically configure ChatGPT, create that record, or invoke the workflow.
+
+Before handoff, configure one ChatGPT-facing integration that prepares a schema-valid Command and sends it through the installation's selected adapter using operator-owned credentials. If the installation keeps the included Actions path, the integration must create a new immutable command record and invoke **Dispatch Site Command**. If it replaces Actions with an authenticated client using `/api/v1/commands`, preserve the same signed Worker contracts and fail-closed checks.
+
+Choose one canonical daily-operation path for the installation rather than operating both paths in parallel.
 
 ## 8. Verify the real installation
 
@@ -79,6 +83,7 @@ The implementation is ready for handoff when:
 - client-owned Cloudflare/GitHub/asset infrastructure is configured
 - the reference design has been replaced as needed
 - required site areas have explicit capabilities
+- one canonical ChatGPT-facing operation path is configured
 - representative commands work end to end
 - the client can make routine updates from ChatGPT without operating the infrastructure directly
 
