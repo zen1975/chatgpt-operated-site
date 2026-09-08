@@ -63,6 +63,11 @@ credential source.
 | `GOOGLE_DRIVE_REFRESH_TOKEN`, `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET` | OAuth refresh-token flow. All three are required together. |
 | `GOOGLE_DRIVE_SA_CLIENT_EMAIL`, `GOOGLE_DRIVE_SA_PRIVATE_KEY` | Service account. Both are required together. |
 
+Follow `docs/GOOGLE_DRIVE_ASSET_INTAKE.md` when provisioning a new Google Drive
+installation. It covers credential selection, folder access, site-profile
+configuration, readiness, and end-to-end acceptance without embedding any
+site-specific identifiers.
+
 `GENERATED_ARTIFACT_ORIGIN` and `GENERATED_ARTIFACT_TOKEN` configure the
 generated-artifact intake adapter and are optional.
 
