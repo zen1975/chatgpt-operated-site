@@ -4,6 +4,8 @@ This repository is an agency/developer starter for building a website that a cli
 
 The included Example Company site is intentionally simple. Treat it like a neutral corporate starter theme: verify the stack first, then replace the visual design and mock content with the client implementation.
 
+Use `IMPLEMENTER_CHECKLIST.md` as the shortest path from a clean fork to client handoff. The included GitHub Actions operation path is documented in `DISPATCH_REFERENCE.md`.
+
 ## Requirements
 
 - Node.js 22.23.2
@@ -59,7 +61,7 @@ while retaining the controlled operation infrastructure.
 
 Do not make arbitrary DOM or database state writable. Define each operation intentionally.
 
-See `EXTENDING_SITE_OPERATIONS.md` for the extension pattern and `DAILY_OPERATION.md` for the resulting client workflow.
+See `EXTENDING_SITE_OPERATIONS.md` for the extension pattern and `DAILY_OPERATION.md` for the resulting client workflow. Use `DISPATCH_REFERENCE.md` when installing the included GitHub Actions adapter.
 
 ## Baseline complete vs client handoff complete
 
@@ -73,6 +75,7 @@ A **real client installation** still needs its own account provisioning and acce
 configure client-owned GitHub / Cloudflare / optional Asset Intake
   -> provision D1 / R2 and other required bindings
   -> run migrations
+  -> configure one ChatGPT-facing operation path
   -> verify one ordinary text/content operation
   -> verify one image-bearing operation if images are enabled
   -> verify the rendered public result
