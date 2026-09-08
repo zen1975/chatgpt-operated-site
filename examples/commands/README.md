@@ -9,7 +9,7 @@ Every command must set `context.targetSite` to `site.id` from `config/site-profi
 ## Included examples
 
 - `create-news.json` — a minimal text/content operation.
-- `replace-content-image.json` — an image-bearing operation using the configured Asset Intake layer. The authenticated dispatch adapter requires readiness when the validated payload contains a new provider reference. A canonical `assetId` skips that readiness check. `context.requiresAssetIntake` is optional compatibility metadata and is not the source of the readiness decision.
+- `replace-content-image.json` — an image-bearing operation using the configured Asset Intake layer. Keep `context.requiresAssetIntake: true` as operation metadata when a command introduces a provider-backed asset. The authenticated dispatch adapter derives the actual readiness requirement from the validated provider reference rather than trusting that flag. A canonical `assetId` skips the new-intake readiness check.
 - `update-page-hero.json` — a page-composition operation showing that the same controlled model can update a homepage hero or other site section, not only posts. Replace the page and section placeholders with identifiers from the target installation and use the current optimistic-lock versions.
 
 ## Extension pattern
