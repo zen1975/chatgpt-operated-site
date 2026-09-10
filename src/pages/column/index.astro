@@ -1,0 +1,17 @@
+---
+export const prerender = false;
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import ContentCard from '@/components/ContentCard.astro';
+import { getArticlesWithMedia } from '@/lib/content';
+const articles = await getArticlesWithMedia(50);
+---
+<BaseLayout title="Insights | Example Company" description="Longer articles published through the controlled operation layer.">
+  <main>
+    <section class="page-hero"><div class="shell"><p class="eyebrow">Ideas</p><h1>Insights</h1><p>Everything published as an article appears here, newest first.</p></div></section>
+    <section class="section"><div class="shell"><div class="card-grid">
+      {articles.length > 0
+        ? articles.map((item) => <ContentCard title={item.title} excerpt={item.excerpt} href={`/column/${item.slug}/`} image={item.media.thumbnail?.path} meta={item.published_at?.slice(0,10)} />)
+        : <p class="empty-state">Articles published through the operation layer will appear here.</p>}
+    </div></div></section>
+  </main>
+</BaseLayout>

@@ -51,6 +51,25 @@ visible way this system can fail, so it is rejected twice -- by
 `scripts/validate-commands.mjs`, which parses the JSON, and by a history scan
 that catches ids reused across commits.
 
+## Rendering routes for the content commands create
+
+The reference site ships routes for everything the shipped commands can
+publish:
+
+```text
+/news/            /news/<slug>/       content_type 'news'
+/column/          /column/<slug>/     content_type 'article'
+```
+
+They match `config/permalink-profile.json`, which is also what
+`resolvePermalink()` returns and what a command reports back as its `url`. If a
+fork changes the permalink profile, these routes move with it.
+
+A command that succeeds but has nowhere to render is not a completed operation:
+dispatch reports success, the URL in the report returns 404, and the requester
+is told the change is live. Keep a route for every content type a command can
+create.
+
 ## The state directory
 
 After dispatch, `process-command.yml` runs `scripts/refresh-state-index.mjs` and
