@@ -57,6 +57,12 @@ Provision with `wrangler secret put <NAME>`. None of these belong in
 Only required when image-bearing operations are enabled. Configure exactly one
 credential source.
 
+This table names the values. It does not explain how to obtain them, where the
+intake folder comes from, or that the folder must be shared with the identity
+the credential belongs to. See **`docs/ASSET_INTAKE_SETUP.md`** for the
+provisioning procedure; the image Golden Path cannot be reproduced from this
+table alone.
+
 | Secret | Credential source |
 | --- | --- |
 | `GOOGLE_DRIVE_ACCESS_TOKEN` | Static access token (shortest-lived; mainly for verification). |

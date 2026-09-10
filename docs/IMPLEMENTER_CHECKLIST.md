@@ -19,7 +19,7 @@ Review and replace the example values in:
 - `config/page-capabilities.json`
 - `wrangler.jsonc`
 
-Provision the Cloudflare resources referenced by the installation and keep secrets out of the repository. See `docs/CONFIGURATION.md`.
+Provision the Cloudflare resources referenced by the installation and keep secrets out of the repository. See `docs/CONFIGURATION.md`. If the installation publishes images, follow `docs/ASSET_INTAKE_SETUP.md` as well; the environment table alone is not enough to make image operations work.
 
 ## 3. Replace the reference website
 
