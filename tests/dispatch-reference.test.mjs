@@ -30,8 +30,8 @@ function transport({ ready = true } = {}) {
     if (new URL(url).pathname === profile.operations.assetIntake.readinessPath) {
       return response({ success: true, readiness: { status: ready ? 'READY' : 'NOT_READY', code: ready ? 'ASSET_INTAKE_READY' : 'ASSET_INTAKE_NOT_READY' } });
     }
-    if (new URL(url).pathname === '/api/control/preflight') return response({ success: true, preflight: receipt });
-    if (new URL(url).pathname === '/api/internal/commands') return response({ success: true, result: { applied: true } });
+    if (new URL(url).pathname === '/api/control/preflight/') return response({ success: true, preflight: receipt });
+    if (new URL(url).pathname === '/api/internal/commands/') return response({ success: true, result: { applied: true } });
     return response({ success: false, error: { code: 'UNEXPECTED_PATH' } }, 404);
   };
   return { calls, fetchImpl };
@@ -73,8 +73,8 @@ test('provider references use readiness, preflight, then mutation', async () => 
   await runDispatch(command, options(stub));
   assert.deepEqual(stub.calls.map((call) => call.url.pathname), [
     profile.operations.assetIntake.readinessPath,
-    '/api/control/preflight',
-    '/api/internal/commands'
+    '/api/control/preflight/',
+    '/api/internal/commands/'
   ]);
 });
 
@@ -84,7 +84,7 @@ test('canonical asset IDs skip provider readiness', async () => {
   command.payload = { ...command.payload, contentId: 'content-example', assetId: 'asset-example' };
   delete command.payload.reference;
   await runDispatch(command, options(stub));
-  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight', '/api/internal/commands']);
+  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight/', '/api/internal/commands/']);
 });
 
 test('an unconfigured provider and a NOT_READY verdict fail before preflight', async () => {
@@ -108,7 +108,7 @@ test('dry-run binds preflight but never reaches the mutation endpoint', async ()
   const result = await runDispatch(base, options(stub, true));
   assert.equal(result.dryRun, true);
   assert.deepEqual(result.command.context.preflight, receipt);
-  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight']);
+  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight/']);
 });
 
 test('dispatch binds the receipt and signs the exact body', async () => {
@@ -158,4 +158,23 @@ test('the emergency ingress uses the same canonical site identity', async () => 
   const source = await readFile(path.join(repoRoot, 'src/pages/api/emergency/news.ts'), 'utf8');
   assert.match(source, /targetSite:\s*SITE_ID/);
   assert.doesNotMatch(source, /targetSite:\s*['\"]emergency-sheet['\"]/);
+});
+
+/**
+ * astro.config.mjs sets trailingSlash: 'always', so an unslashed API path is
+ * answered with a 308. The HMAC signature covers the path and is computed
+ * before that redirect, so an unslashed request is verified against a path it
+ * did not sign and fails with CONTROL_READ_AUTH_INVALID. Every signed request
+ * must therefore be built on the slashed path.
+ */
+test('every signed request path carries a trailing slash', async () => {
+  const stub = transport();
+  const command = structuredClone(image);
+  command.payload.contentId = 'content-example';
+  command.payload.reference.providerAssetId = 'drive-file-example';
+  await runDispatch(command, options(stub));
+  assert.ok(stub.calls.length > 0);
+  for (const call of stub.calls) {
+    assert.ok(call.url.pathname.endsWith('/'), `signed path must end with '/': ${call.url.pathname}`);
+  }
 });

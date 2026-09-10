@@ -1,0 +1,191 @@
+# Dispatch commands that were committed to commands/**.
+#
+# dispatch-command.yml is workflow_dispatch only: committing a command does
+# nothing until a human opens the Actions tab and presses a button. That breaks
+# the Golden Path, because the operator (ChatGPT) can commit a file but cannot
+# press that button.
+#
+# `on: push` alone is not enough. This workflow also has to hold five properties
+# that were established while operating a real site:
+#   1. only newly added commands are dispatched (not modifications or deletions)
+#   2. multiple commands run one at a time in a deterministic order
+#   3. edits to existing commands are rejected -- commands/** is an immutable log
+#   4. dry-run and execution are separate; nothing executes unless every
+#      command in the push passed dry-run
+#   5. a repeated commandId is rejected here as well as in the worker
+name: Process committed commands
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'commands/**/*.json'
+  # Manual entry point for regenerating state/ on its own. Re-running a past
+  # command is not a way to refresh state: the command has already been applied,
+  # so it fails on the version check. This path skips collection and only
+  # regenerates.
+  workflow_dispatch:
+
+permissions:
+  # Needed to commit the regenerated state/ back. Nothing outside state/ is written.
+  contents: write
+
+concurrency:
+  group: process-commands
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: site-operations
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - run: npm ci
+
+      # Properties 1 and 3.
+      - name: Collect added commands
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          before='${{ github.event.before }}'
+          if [ "$before" = "0000000000000000000000000000000000000000" ]; then
+            added=$(git ls-files 'commands/**/*.json')
+            modified=""
+          else
+            added=$(git diff --diff-filter=A --name-only "$before" '${{ github.sha }}' -- 'commands/**/*.json' || true)
+            modified=$(git diff --diff-filter=MD --name-only "$before" '${{ github.sha }}' -- 'commands/**/*.json' || true)
+          fi
+          if [ -n "$modified" ]; then
+            echo "::error::commands/** is an immutable operation log. Modified or deleted commands are rejected:"
+            echo "$modified"
+            exit 1
+          fi
+          # Property 2: deterministic order.
+          added=$(printf '%s\n' "$added" | sed '/^$/d' | sort)
+          echo "count=$(printf '%s\n' "$added" | sed '/^$/d' | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          {
+            echo "files<<EOF"
+            printf '%s\n' "$added"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Property 5, part one: has this commandId ever been added before?
+      - name: Reject previously used commandIds
+        if: steps.collect.outputs.count != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(printf '%s\n' '${{ steps.collect.outputs.files }}' | sed '/^$/d')
+          dupes=""
+          for f in "${files[@]}"; do
+            id=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$f','utf8')).commandId)")
+            hits=$(git log --diff-filter=A --name-only --pretty=format: -S"\"commandId\": \"$id\"" -- 'commands/**/*.json' | sed '/^$/d' | sort -u | grep -v "^$f$" || true)
+            [ -n "$hits" ] && dupes="$dupes\n$id ($f) already appears in: $hits"
+          done
+          if [ -n "$dupes" ]; then
+            echo -e "::error::duplicate commandId:$dupes"
+            exit 1
+          fi
+
+      # Property 5, part two, plus contract conformance. The git log -S check
+      # above matches on file text, so it is defeated by reformatting; this
+      # check parses the JSON.
+      - name: Validate commands
+        if: steps.collect.outputs.count != '0'
+        shell: bash
+        run: node scripts/validate-commands.mjs commands
+
+      # Property 4: dry-run everything first. One failure stops the batch.
+      - name: Dry-run all commands
+        if: steps.collect.outputs.count != '0'
+        env:
+          SITE_ENDPOINT: ${{ vars.SITE_ENDPOINT }}
+          CONTROL_READ_HMAC_SECRET: ${{ secrets.CONTROL_READ_HMAC_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(printf '%s\n' '${{ steps.collect.outputs.files }}' | sed '/^$/d')
+          for f in "${files[@]}"; do
+            echo "-- dry-run: $f"
+            node scripts/dispatch-command.mjs --command-file "$f" --dry-run
+          done
+
+      - name: Dispatch all commands
+        if: steps.collect.outputs.count != '0'
+        env:
+          SITE_ENDPOINT: ${{ vars.SITE_ENDPOINT }}
+          CONTROL_READ_HMAC_SECRET: ${{ secrets.CONTROL_READ_HMAC_SECRET }}
+          COMMAND_HMAC_SECRET: ${{ secrets.COMMAND_HMAC_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(printf '%s\n' '${{ steps.collect.outputs.files }}' | sed '/^$/d')
+          for f in "${files[@]}"; do
+            echo "-- dispatch: $f"
+            node scripts/dispatch-command.mjs --command-file "$f"
+          done
+
+      # Publish the current ids and versions back into the repository. Without
+      # this the operator uses a stale expectedVersion on the next update and
+      # the update always conflicts. The push filter only watches commands/**,
+      # so committing state/ does not re-trigger this workflow.
+      - name: Refresh state index
+        if: always() && (steps.collect.outputs.count != '0' || github.event_name == 'workflow_dispatch')
+        env:
+          SITE_ENDPOINT: ${{ vars.SITE_ENDPOINT }}
+          CONTROL_READ_HMAC_SECRET: ${{ secrets.CONTROL_READ_HMAC_SECRET }}
+        shell: bash
+        run: node scripts/refresh-state-index.mjs
+
+      - name: Commit state index
+        if: always() && (steps.collect.outputs.count != '0' || github.event_name == 'workflow_dispatch')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- state/; then
+            echo "state/ unchanged"
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # main can move while a command is being dispatched, because the
+          # requester may commit several commands in a row. Keep the generated
+          # state/ aside and always replay it onto the current main.
+          tmp="$(mktemp -d)"
+          cp -R state/. "$tmp"/
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            cp -R "$tmp"/. state/
+
+            if git diff --quiet -- state/; then
+              echo "current main already matches the generated state/"
+              exit 0
+            fi
+
+            git add state/
+            git commit -m 'chore(state): refresh ids and versions after dispatch'
+
+            if git push origin HEAD:main; then
+              echo "state/ updated (attempt ${attempt})"
+              exit 0
+            fi
+
+            echo "push rejected; refetching main and retrying (${attempt}/3)"
+            sleep 3
+          done
+
+          echo "::error::could not push the state/ update after 3 attempts"
+          exit 1

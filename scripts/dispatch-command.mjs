@@ -96,7 +96,17 @@ export function providerReference(commandName, payload) {
 
 function endpointUrl(endpoint, pathname) {
   const base = endpoint.endsWith('/') ? endpoint : `${endpoint}/`;
-  return new URL(pathname.replace(/^\//, ''), base);
+  // astro.config.mjs sets trailingSlash: 'always', so an API path without a
+  // trailing slash is answered with a 308 to the slashed path. The HMAC
+  // signature covers the path, and it is computed before the redirect, so the
+  // server verifies a different path than the one that was signed and every
+  // request fails with CONTROL_READ_AUTH_INVALID.
+  //
+  // Normalize to the path that is actually reached, then sign and send that.
+  // Adding `export const trailingSlash = 'never'` to the route files does not
+  // fix this; it was tried and the redirect still occurred.
+  const normalized = pathname.endsWith('/') ? pathname : `${pathname}/`;
+  return new URL(normalized.replace(/^\//, ''), base);
 }
 
 function jsonResponseError(status, body) {

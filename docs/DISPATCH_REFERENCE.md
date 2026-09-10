@@ -26,6 +26,58 @@ The Worker remains authoritative for authentication, authorization, schema and
 capability rules, optimistic versioning, idempotency, and mutation. Replacing
 GitHub Actions must not remove those Worker checks.
 
+## Two workflows
+
+| Workflow | Trigger | Use |
+| --- | --- | --- |
+| `dispatch-command.yml` | manual (`workflow_dispatch`) | One named command, with an explicit dry-run switch. The path to read while learning the system. |
+| `process-command.yml` | push to `main` under `commands/**` | Committing a command dispatches it. This is the path an operator can actually reach. |
+
+`dispatch-command.yml` alone does not complete the Golden Path: ChatGPT can
+commit a file, but it cannot open the Actions tab and press a button. Nothing
+happens until a person does. `process-command.yml` closes that gap and holds
+five properties that a bare `on: push` does not:
+
+1. only newly added commands are dispatched
+2. commands run one at a time, in path order
+3. edits and deletions under `commands/**` are rejected -- it is an immutable log
+4. every command is dry-run first; one failure stops the whole batch
+5. a commandId that has been used before is rejected before dispatch
+
+Property 5 matters more than it looks. A repeated commandId is treated by the
+Worker as a replay: it returns success and applies nothing. The requester is
+told the change was registered and the site does not change. That is the least
+visible way this system can fail, so it is rejected twice -- by
+`scripts/validate-commands.mjs`, which parses the JSON, and by a history scan
+that catches ids reused across commits.
+
+## The state directory
+
+After dispatch, `process-command.yml` runs `scripts/refresh-state-index.mjs` and
+commits the result to `state/`:
+
+```text
+state/content-index.json   current content ids, versions, URLs, body locations
+state/page-index.json      current page ids, versions, section ids and versions
+state/bodies/*.json        the stored body of each content item
+```
+
+Update commands require an `expectedVersion`, and the operator cannot sign a
+control-plane read, so without this the only available numbers come from
+`commands/**` -- a log of past operations, not current state. Every update then
+fails on the version check.
+
+`state/bodies/` exists for the same reason in the other direction: without the
+stored body, an update has to be built from the rendered HTML, which silently
+drops whatever rendering does not preserve. The content degrades a little on
+every edit.
+
+Read `state/`, never the published page, and never `commands/**`.
+
+Regenerating `state/` on its own is the `workflow_dispatch` entry point of
+`process-command.yml`. Re-running an old command does not refresh it: the
+command has already been applied and fails on its version check.
+
 ## GitHub environment
 
 Create a protected environment named `site-operations`.

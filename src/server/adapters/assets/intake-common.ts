@@ -39,8 +39,13 @@ function readU32(bytes: Uint8Array, offset: number) {
 function imageDimensions(bytes: Uint8Array, mimeType: AssetMimeType): { width: number; height: number } | null {
   if (mimeType === 'image/png' && bytes.length >= 24) return { width: readU32(bytes, 16), height: readU32(bytes, 20) };
   if (mimeType === 'image/webp' && bytes.length >= 30 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF') {
-    const kind = String.fromCharCode(...bytes.slice(12, 16));
-    if (kind === 'WEBP' && String.fromCharCode(...bytes.slice(16, 20)) === 'VP8X') {
+    // RIFF container layout: 0-3 'RIFF', 4-7 file size, 8-11 'WEBP',
+    // 12-15 chunk fourcc. Reading the form marker at 12 and the chunk at 16
+    // is off by one field, so no WebP file ever matches and every WebP is
+    // rejected for missing dimensions. Use the same offsets the MIME check
+    // in this file already uses.
+    const container = String.fromCharCode(...bytes.slice(8, 12));
+    if (container === 'WEBP' && String.fromCharCode(...bytes.slice(12, 16)) === 'VP8X') {
       return { width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16), height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16) };
     }
   }

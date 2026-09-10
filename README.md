@@ -106,6 +106,7 @@ It is also not a hardened control plane. Lease recovery, transactional fencing, 
 - [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) — shortest path from fork to client implementation
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
+- [`docs/ASSET_INTAKE_SETUP.md`](docs/ASSET_INTAKE_SETUP.md) — provisioning the Google Drive intake folder and its credential
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
 - [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) — minimal, replaceable GitHub Actions dispatch adapter
 - [`docs/EXTENDING_SITE_OPERATIONS.md`](docs/EXTENDING_SITE_OPERATIONS.md) — adding new controlled site operations
