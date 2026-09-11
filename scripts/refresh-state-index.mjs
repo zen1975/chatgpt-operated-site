@@ -31,11 +31,17 @@ if (!endpoint || !secret) {
  * Always request the path with a trailing slash. astro.config.mjs sets
  * trailingSlash: 'always', and the signature covers the path, so an unslashed
  * path is redirected to a path that no longer matches the signature.
+ *
+ * The signature covers the path only -- the server verifies
+ * `new URL(request.url).pathname` -- so a query string is sent but never
+ * signed. Keep the two arguments separate; concatenating them into `pathname`
+ * reintroduces the same class of 401 as the trailing slash did.
  */
-async function read(pathname) {
+async function read(pathname, query) {
   const timestamp = new Date().toISOString();
   const signature = createHmac('sha256', secret).update(`${timestamp}.GET.${pathname}`).digest('hex');
-  const res = await fetch(endpoint + pathname, {
+  const search = query && [...query.keys()].length ? `?${query}` : '';
+  const res = await fetch(endpoint + pathname + search, {
     headers: { 'x-control-timestamp': timestamp, 'x-control-signature': signature }
   });
   const body = await res.json().catch(() => ({}));
@@ -57,21 +63,41 @@ const permalink = (item) => {
   return typeof pattern === 'string' ? pattern.replace('{slug}', item.slug) : null;
 };
 
-const content = await read('/api/control/content/');
-const pages = await read('/api/control/pages/');
+/**
+ * Follow the cursor to the end. The discovery endpoints return 50 rows by
+ * default and hand back a `nextCursor`; reading only the first response drops
+ * every item past the first page, and those items then have no index entry, no
+ * body, and no section versions -- they cannot be operated on at all, silently.
+ */
+async function readAll(pathname, field) {
+  const items = [];
+  let cursor = null;
+  for (let page = 0; page < 1000; page += 1) {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const body = await read(pathname, query);
+    items.push(...(body[field] || []));
+    cursor = body.nextCursor || null;
+    if (!cursor) return items;
+  }
+  throw new Error(`${pathname}: cursor did not terminate`);
+}
+
+const contentItems = await readAll('/api/control/content/', 'content');
+const pageItems = await readAll('/api/control/pages/', 'pages');
 
 const now = new Date().toISOString();
 const contentIndex = {
   note: 'Current content ids, versions and body locations. Read contentId and expectedVersion for update_content from here, and the body from the file that `body` points to. Do not read them from the published page, and do not copy them from commands/**.',
   generatedAt: now,
-  items: (content.content || [])
+  items: contentItems
     .map((c) => ({ id: c.id, slug: c.slug, title: c.title, contentType: c.type, status: c.status, version: c.version, url: permalink(c) }))
     .sort((a, b) => a.slug.localeCompare(b.slug))
 };
 const pageIndex = {
   note: 'Current page ids and versions. Read pageId and expectedVersion for update_page_section from here; section ids and versions are under `sections`.',
   generatedAt: now,
-  items: (pages.pages || [])
+  items: pageItems
     .map((p) => ({ id: p.id, slug: p.slug, title: p.title, pageType: p.type, status: p.status, version: p.version, url: `/${p.slug}/` }))
     .sort((a, b) => a.slug.localeCompare(b.slug))
 };

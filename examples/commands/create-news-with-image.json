@@ -5,7 +5,8 @@
   "issuedAt": "2026-09-10T00:00:00Z",
   "context": {
     "ruleVersion": "0.1.0",
-    "targetSite": "example-site"
+    "targetSite": "example-site",
+    "requiresAssetIntake": true
   },
   "payload": {
     "title": "Example update with an image",

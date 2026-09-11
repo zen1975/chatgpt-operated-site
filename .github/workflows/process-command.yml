@@ -165,7 +165,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- state/; then
+          # Stage first. On an installation that has never committed state/, the
+          # refresh produces only untracked files, and `git diff` does not see
+          # untracked files -- the check would exit here and the state index
+          # would never be published at all.
+          git add -A state/
+          if git diff --cached --quiet -- state/; then
             echo "state/ unchanged"
             exit 0
           fi
@@ -182,13 +187,13 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             cp -R "$tmp"/. state/
+            git add -A state/
 
-            if git diff --quiet -- state/; then
+            if git diff --cached --quiet -- state/; then
               echo "current main already matches the generated state/"
               exit 0
             fi
 
-            git add state/
             git commit -m 'chore(state): refresh ids and versions after dispatch'
 
             if git push origin HEAD:main; then
