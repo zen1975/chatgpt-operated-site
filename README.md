@@ -15,7 +15,15 @@ npm ci
 npm run verify   # build + contract checks
 ```
 
-Then use [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) as the shortest path from this repository to a real client implementation. [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) contains the fuller installation and handoff guidance, and [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) documents the minimal GitHub Actions golden path.
+That proves the baseline on an unmodified clone. To get from there to a live site that publishes an article when you push a file, follow [`docs/QUICK_START.md`](docs/QUICK_START.md) — around thirty minutes, mostly waiting on Cloudflare.
+
+After that: [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) is the shortest path from this repository to a real client implementation, [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) has the fuller installation and handoff guidance, and [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) documents the GitHub Actions dispatch path.
+
+## The operator instructions ship with it
+
+The client talks to ChatGPT. What tells ChatGPT how to behave is [`ai/`](ai/), and it is part of the baseline rather than something each implementer invents.
+
+Correct code with absent or badly placed instructions does not produce a working installation. [`ai/README.md`](ai/README.md) explains the one rule that matters most: whether a rule goes in the pasted setup text or in the repository depends on **when it has to take effect**, not on what it says.
 
 ## What is included
 
@@ -77,6 +85,43 @@ A configured client should be able to make ordinary requests such as:
 
 The client should not need to understand the implementation details behind those operations. See [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) for the operating model.
 
+### What that actually does
+
+The sentence on the left is the whole client-facing interface. Everything below it is a file in a repository, reviewable and revertable like any other change.
+
+```text
+  "Publish this as a news post."
+       |
+       v
+  commands/2026/09/autumn-hours.json      an immutable command file
+       |                                   { "command": "create_news",
+       |                                     "payload": { "title": ..., "blocks": [...] } }
+       v
+  git push
+       |
+       v
+  validate -> reject duplicates -> dry-run -> dispatch -> render
+                                              (the dispatch request
+                                               is HMAC-signed)
+       |
+       v
+  https://example.com/news/autumn-hours/   and state/ now records its version
+```
+
+The command file itself is immutable once committed; the signature is on the dispatch request that carries it to the Worker, not on the file.
+
+There is no admin dashboard. This is the one canonical operating path for client changes, which is why the site's operating history is the repository's history. Other API ingress exists for implementers and for emergency use, and each is documented in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+
+### Done means three things
+
+```text
+1. The dispatch succeeded
+2. The rendered site shows the requested state
+3. What the operator told the requester matches 1 and 2
+```
+
+The third is not decoration. The operator is the only surface the client sees, so a correct system that reports incorrectly has not delivered anything. This system has produced both failures: a success reported as a failure, and a success reported with a URL that returned 404.
+
 ## Architecture
 
 ```text
@@ -106,6 +151,9 @@ It is also not a hardened control plane. Lease recovery, transactional fencing, 
 - [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) — shortest path from fork to client implementation
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
+- [`docs/QUICK_START.md`](docs/QUICK_START.md) — clean clone to a live site that publishes on push
+- [`docs/FORK_AND_UPSTREAM.md`](docs/FORK_AND_UPSTREAM.md) — what a fork may override, and what belongs back here
+- [`ai/README.md`](ai/README.md) — operator instruction templates and where each rule belongs
 - [`docs/ASSET_INTAKE_SETUP.md`](docs/ASSET_INTAKE_SETUP.md) — provisioning the Google Drive intake folder and its credential
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
 - [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) — minimal, replaceable GitHub Actions dispatch adapter
@@ -116,9 +164,17 @@ It is also not a hardened control plane. Lease recovery, transactional fencing, 
 
 ## Project status
 
-The **implementer baseline is assembled and continuously verified**. Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
+The baseline has been run, not just assembled.
 
-The repository remains private until the owner chooses to publish it. Making it public does not require proving every possible client deployment first; each real installation should still complete its own provisioning and end-to-end acceptance before client handoff.
+- A real company website was built on it and operated for four days through ChatGPT by someone who does not read code, on both desktop and a phone, for text and for images.
+- Doing that surfaced 35 defects, gaps, and missing documents. All of them are recorded; the ones that blocked a clean-clone reproduction are fixed.
+- The golden path has since been reproduced twice more on throwaway Cloudflare installations built from clean clones: provision, migrate, deploy, publish an article, render it, and write the current state back. The image half — one command publishing an article together with its picture — was proven on the first of the two.
+
+Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
+
+What that does **not** mean: that every downstream Cloudflare, Google, or GitHub account is already provisioned. Each real installation still completes its own provisioning and end-to-end acceptance before client handoff. See [`docs/QUICK_START.md`](docs/QUICK_START.md) for what that takes.
+
+The repository remains private until the owner chooses to publish it.
 
 The dispatch adapter in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) is a reference implementation of the golden path, not production acceptance evidence. Hardening it for a live installation is the implementer's work.
 
