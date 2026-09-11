@@ -59,11 +59,24 @@ jobs:
           set -euo pipefail
           before='${{ github.event.before }}'
           if [ "$before" = "0000000000000000000000000000000000000000" ]; then
-            added=$(git ls-files 'commands/**/*.json')
+            # First push of this branch: a repository bootstrap, not an operation.
+            # Dispatching here would replay the entire operation log against the
+            # installation this branch now points at -- on a fresh database those
+            # commandIds are unseen, so every one of them would apply. Only the
+            # state index is refreshed.
+            echo '::notice::first push of this branch; no commands are dispatched'
+            added=""
             modified=""
           else
-            added=$(git diff --diff-filter=A --name-only "$before" '${{ github.sha }}' -- 'commands/**/*.json' || true)
-            modified=$(git diff --diff-filter=MD --name-only "$before" '${{ github.sha }}' -- 'commands/**/*.json' || true)
+            # --no-renames matters. Git reports a command file whose content is
+            # mostly unchanged as R, which is neither A nor D, so without this a
+            # renamed command is silently neither dispatched nor rejected: the
+            # push is green and nothing happens. With it, a rename becomes an
+            # addition plus a deletion -- the addition is dispatched and the
+            # deletion is rejected, which is the correct reading of an edit to
+            # an immutable log.
+            added=$(git diff --no-renames --diff-filter=A --name-only "$before" '${{ github.sha }}' -- 'commands/**/*.json' || true)
+            modified=$(git diff --no-renames --diff-filter=MD --name-only "$before" '${{ github.sha }}' -- 'commands/**/*.json' || true)
           fi
           if [ -n "$modified" ]; then
             echo "::error::commands/** is an immutable operation log. Modified or deleted commands are rejected:"
