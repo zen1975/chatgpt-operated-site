@@ -10,6 +10,11 @@ This page is the provisioning procedure. Follow it once per installation.
 Skip this page entirely if the installation does not publish images. Asset
 Intake is optional and the text Golden Path does not depend on it.
 
+If the installation does publish images, this is the path: **Google Drive is
+the only provider the reference readiness flow supports.** The `generated`
+adapter exists for implementers with their own artifact origin and their own
+gate, and does not pass this one. See `docs/DISPATCH_REFERENCE.md`.
+
 ---
 
 ## What is being built
