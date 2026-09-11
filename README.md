@@ -164,7 +164,7 @@ The baseline has been run, not just assembled.
 
 - A real company website was built on it and operated for four days through ChatGPT by someone who does not read code, on both desktop and a phone, for text and for images.
 - Doing that surfaced 35 defects, gaps, and missing documents. All of them are recorded; the ones that blocked a clean-clone reproduction are fixed.
-- The golden path has since been reproduced twice more, on throwaway Cloudflare installations built from clean clones — provision, migrate, deploy, publish an article, publish an article with an image, render, and write the current state back.
+- The golden path has since been reproduced twice more on throwaway Cloudflare installations built from clean clones: provision, migrate, deploy, publish an article, render it, and write the current state back. The image half — one command publishing an article together with its picture — was proven on the first of the two.
 
 Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
 
