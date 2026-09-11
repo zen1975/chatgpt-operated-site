@@ -2,6 +2,8 @@
 
 > **Build websites your clients can update from ChatGPT.**
 
+> ChatGPT interprets intent. Infrastructure enforces boundaries. The AI is not the authority.
+
 ChatGPT Operated Site is an open-source website operations starter for agencies, developers, freelancers, and teams building client websites.
 
 The repository includes a simple English Astro corporate website together with the controlled operation layer underneath it. The included website is intentionally similar in spirit to a clean starter theme: it demonstrates the system without prescribing a client's brand or design.
@@ -174,7 +176,7 @@ Clean installation, build, contract checks, schema/example checks, migration che
 
 What that does **not** mean: that every downstream Cloudflare, Google, or GitHub account is already provisioned. Each real installation still completes its own provisioning and end-to-end acceptance before client handoff. See [`docs/QUICK_START.md`](docs/QUICK_START.md) for what that takes.
 
-The repository remains private until the owner chooses to publish it.
+The repository is public and available under the MIT License.
 
 The dispatch adapter in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) is a reference implementation of the golden path, not production acceptance evidence. Hardening it for a live installation is the implementer's work.
 
