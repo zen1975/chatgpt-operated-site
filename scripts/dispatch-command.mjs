@@ -7,10 +7,19 @@ import { fileURLToPath } from 'node:url';
 import { loadCommandContracts, loadRuleVersion, repoRoot } from './load-command-contracts.mjs';
 
 const execFileAsync = promisify(execFile);
+// Commands whose payload carries a single `reference`.
 const PROVIDER_REFERENCE_COMMANDS = new Set([
   'replace_asset',
   'replace_product_asset',
   'replace_page_section_asset'
+]);
+
+// Commands whose payload carries an array of references. A command that can
+// introduce a provider asset must appear in one of these two sets, or it
+// reaches ingestion without the configured-provider check and the readiness
+// request -- the gate this adapter exists to enforce.
+const PROVIDER_REFERENCE_LIST_COMMANDS = new Map([
+  ['create_news', 'assets']
 ]);
 
 export class DispatchError extends Error {
@@ -88,15 +97,39 @@ export async function validateCommand(input, profile) {
   return { command, payload: payload.data, profile };
 }
 
+const isProviderReference = (value) => Boolean(value) && typeof value.provider === 'string';
+
+/** Every provider reference the payload carries, in payload order. */
+export function providerReferences(commandName, payload) {
+  const references = [];
+  if (PROVIDER_REFERENCE_COMMANDS.has(commandName) && isProviderReference(payload?.reference)) {
+    references.push(payload.reference);
+  }
+  const listField = PROVIDER_REFERENCE_LIST_COMMANDS.get(commandName);
+  if (listField) {
+    for (const value of payload?.[listField] ?? []) if (isProviderReference(value)) references.push(value);
+  }
+  return references;
+}
+
+/** The first provider reference, or null. Retained for single-reference callers. */
 export function providerReference(commandName, payload) {
-  if (!PROVIDER_REFERENCE_COMMANDS.has(commandName)) return null;
-  const reference = payload?.reference;
-  return reference && typeof reference.provider === 'string' ? reference : null;
+  return providerReferences(commandName, payload)[0] ?? null;
 }
 
 function endpointUrl(endpoint, pathname) {
   const base = endpoint.endsWith('/') ? endpoint : `${endpoint}/`;
-  return new URL(pathname.replace(/^\//, ''), base);
+  // astro.config.mjs sets trailingSlash: 'always', so an API path without a
+  // trailing slash is answered with a 308 to the slashed path. The HMAC
+  // signature covers the path, and it is computed before the redirect, so the
+  // server verifies a different path than the one that was signed and every
+  // request fails with CONTROL_READ_AUTH_INVALID.
+  //
+  // Normalize to the path that is actually reached, then sign and send that.
+  // Adding `export const trailingSlash = 'never'` to the route files does not
+  // fix this; it was tried and the redirect still occurred.
+  const normalized = pathname.endsWith('/') ? pathname : `${pathname}/`;
+  return new URL(normalized.replace(/^\//, ''), base);
 }
 
 function jsonResponseError(status, body) {
@@ -144,13 +177,17 @@ async function commandRequest({ endpoint, command, secret, fetchImpl }) {
 
 export async function runDispatch(input, options) {
   const { command, payload, profile } = await validateCommand(input, options.profile);
-  const reference = providerReference(command.command, payload);
+  const references = providerReferences(command.command, payload);
   const configuredIntake = profile.operations?.assetIntake;
 
-  if (reference) {
-    if (!configuredIntake || reference.provider !== configuredIntake.provider) {
-      throw new DispatchError('ASSET_INTAKE_PROVIDER_NOT_CONFIGURED', `Provider ${reference.provider} is not the configured Asset Intake provider.`);
+  if (references.length) {
+    for (const reference of references) {
+      if (!configuredIntake || reference.provider !== configuredIntake.provider) {
+        throw new DispatchError('ASSET_INTAKE_PROVIDER_NOT_CONFIGURED', `Provider ${reference.provider} is not the configured Asset Intake provider.`);
+      }
     }
+    // One readiness request regardless of how many references the payload
+    // carries: they all resolve through the same configured intake.
     const readiness = await controlRequest({
       endpoint: options.endpoint,
       pathname: configuredIntake.readinessPath,

@@ -231,6 +231,77 @@
         ]
       }
     },
+    "assets": {
+      "default": [],
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "google_drive",
+              "generated"
+            ]
+          },
+          "providerAssetId": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 512
+          },
+          "intendedRole": {
+            "type": "string",
+            "enum": [
+              "hero",
+              "thumbnail",
+              "ogp",
+              "inline"
+            ]
+          },
+          "alt": {
+            "default": "",
+            "type": "string",
+            "maxLength": 500
+          },
+          "metadata": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "expectedChecksum": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "provider",
+          "providerAssetId",
+          "intendedRole"
+        ],
+        "additionalProperties": false
+      }
+    },
     "contentType": {
       "default": "news",
       "type": "string",

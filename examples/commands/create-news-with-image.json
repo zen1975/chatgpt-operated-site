@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "commandId": "example-image-news-001",
+  "command": "create_news",
+  "issuedAt": "2026-09-10T00:00:00Z",
+  "context": {
+    "ruleVersion": "0.1.0",
+    "targetSite": "example-site",
+    "requiresAssetIntake": true
+  },
+  "payload": {
+    "title": "Example update with an image",
+    "slug": "example-image-news",
+    "excerpt": "Publishing text and its image in a single command.",
+    "contentType": "article",
+    "templateProfile": "article-professional",
+    "blocks": [
+      {
+        "type": "paragraph",
+        "content": "Associating the image at creation time keeps the ordinary request -- publish an article with an image -- to a single round trip."
+      }
+    ],
+    "assets": [
+      {
+        "provider": "google_drive",
+        "providerAssetId": "REPLACE_WITH_DRIVE_FILE_ID",
+        "intendedRole": "hero",
+        "alt": "Describe the image for readers who cannot see it."
+      }
+    ]
+  }
+}

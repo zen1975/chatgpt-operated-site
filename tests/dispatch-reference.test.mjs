@@ -8,6 +8,7 @@ import {
   DispatchError,
   normalizeCommandPath,
   providerReference,
+  providerReferences,
   readCommittedCommand,
   runDispatch,
   validateCommand
@@ -30,8 +31,8 @@ function transport({ ready = true } = {}) {
     if (new URL(url).pathname === profile.operations.assetIntake.readinessPath) {
       return response({ success: true, readiness: { status: ready ? 'READY' : 'NOT_READY', code: ready ? 'ASSET_INTAKE_READY' : 'ASSET_INTAKE_NOT_READY' } });
     }
-    if (new URL(url).pathname === '/api/control/preflight') return response({ success: true, preflight: receipt });
-    if (new URL(url).pathname === '/api/internal/commands') return response({ success: true, result: { applied: true } });
+    if (new URL(url).pathname === '/api/control/preflight/') return response({ success: true, preflight: receipt });
+    if (new URL(url).pathname === '/api/internal/commands/') return response({ success: true, result: { applied: true } });
     return response({ success: false, error: { code: 'UNEXPECTED_PATH' } }, 404);
   };
   return { calls, fetchImpl };
@@ -73,8 +74,8 @@ test('provider references use readiness, preflight, then mutation', async () => 
   await runDispatch(command, options(stub));
   assert.deepEqual(stub.calls.map((call) => call.url.pathname), [
     profile.operations.assetIntake.readinessPath,
-    '/api/control/preflight',
-    '/api/internal/commands'
+    '/api/control/preflight/',
+    '/api/internal/commands/'
   ]);
 });
 
@@ -84,7 +85,7 @@ test('canonical asset IDs skip provider readiness', async () => {
   command.payload = { ...command.payload, contentId: 'content-example', assetId: 'asset-example' };
   delete command.payload.reference;
   await runDispatch(command, options(stub));
-  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight', '/api/internal/commands']);
+  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight/', '/api/internal/commands/']);
 });
 
 test('an unconfigured provider and a NOT_READY verdict fail before preflight', async () => {
@@ -108,7 +109,7 @@ test('dry-run binds preflight but never reaches the mutation endpoint', async ()
   const result = await runDispatch(base, options(stub, true));
   assert.equal(result.dryRun, true);
   assert.deepEqual(result.command.context.preflight, receipt);
-  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight']);
+  assert.deepEqual(stub.calls.map((call) => call.url.pathname), ['/api/control/preflight/']);
 });
 
 test('dispatch binds the receipt and signs the exact body', async () => {
@@ -123,7 +124,48 @@ test('dispatch binds the receipt and signs the exact body', async () => {
 
 test('provider detection is limited to schemas that own provider references', () => {
   assert.equal(providerReference('replace_asset', { reference: { provider: 'google_drive' } }).provider, 'google_drive');
+  // create_news carries references in `assets`, never in `reference`.
   assert.equal(providerReference('create_news', { reference: { provider: 'google_drive' } }), null);
+  assert.deepEqual(providerReferences('update_content', { assets: [{ provider: 'google_drive' }] }), []);
+});
+
+/**
+ * A command that can introduce a provider asset must be seen by the readiness
+ * gate. create_news accepts an `assets` array, and when that array was not read
+ * here the command reached ingestion without the configured-provider check or
+ * the readiness request, which is the opposite of failing closed.
+ */
+test('every provider reference in an asset array is collected', () => {
+  const payload = { assets: [{ provider: 'google_drive', providerAssetId: 'a' }, { provider: 'generated', providerAssetId: 'b' }] };
+  assert.deepEqual(providerReferences('create_news', payload).map((r) => r.provider), ['google_drive', 'generated']);
+  assert.equal(providerReferences('create_news', {}).length, 0);
+  assert.equal(providerReferences('create_news', { assets: [] }).length, 0);
+});
+
+test('create_news with an unconfigured provider fails before preflight', async () => {
+  const stub = transport();
+  const command = structuredClone(base);
+  command.commandId = 'create-news-unconfigured-provider';
+  command.payload = { ...command.payload, assets: [{ provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }] };
+  await assert.rejects(runDispatch(command, options(stub)), { code: 'ASSET_INTAKE_PROVIDER_NOT_CONFIGURED' });
+  assert.equal(stub.calls.length, 0);
+});
+
+test('create_news with the configured provider checks readiness before preflight', async () => {
+  const stub = transport();
+  const command = structuredClone(base);
+  command.commandId = 'create-news-configured-provider';
+  command.payload = { ...command.payload, assets: [{ provider: 'google_drive', providerAssetId: 'drive-file-example', intendedRole: 'hero' }] };
+  await runDispatch(command, options(stub));
+  assert.deepEqual(stub.calls.map((call) => call.url.pathname), [
+    profile.operations.assetIntake.readinessPath,
+    '/api/control/preflight/',
+    '/api/internal/commands/'
+  ]);
+
+  const notReady = transport({ ready: false });
+  await assert.rejects(runDispatch(command, options(notReady)), { code: 'ASSET_INTAKE_NOT_READY' });
+  assert.equal(notReady.calls.length, 1);
 });
 
 test('committed command reader uses the HEAD blob and rejects non-blob entries', async () => {
@@ -158,4 +200,23 @@ test('the emergency ingress uses the same canonical site identity', async () => 
   const source = await readFile(path.join(repoRoot, 'src/pages/api/emergency/news.ts'), 'utf8');
   assert.match(source, /targetSite:\s*SITE_ID/);
   assert.doesNotMatch(source, /targetSite:\s*['\"]emergency-sheet['\"]/);
+});
+
+/**
+ * astro.config.mjs sets trailingSlash: 'always', so an unslashed API path is
+ * answered with a 308. The HMAC signature covers the path and is computed
+ * before that redirect, so an unslashed request is verified against a path it
+ * did not sign and fails with CONTROL_READ_AUTH_INVALID. Every signed request
+ * must therefore be built on the slashed path.
+ */
+test('every signed request path carries a trailing slash', async () => {
+  const stub = transport();
+  const command = structuredClone(image);
+  command.payload.contentId = 'content-example';
+  command.payload.reference.providerAssetId = 'drive-file-example';
+  await runDispatch(command, options(stub));
+  assert.ok(stub.calls.length > 0);
+  for (const call of stub.calls) {
+    assert.ok(call.url.pathname.endsWith('/'), `signed path must end with '/': ${call.url.pathname}`);
+  }
 });

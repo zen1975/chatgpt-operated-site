@@ -57,6 +57,12 @@ Provision with `wrangler secret put <NAME>`. None of these belong in
 Only required when image-bearing operations are enabled. Configure exactly one
 credential source.
 
+This table names the values. It does not explain how to obtain them, where the
+intake folder comes from, or that the folder must be shared with the identity
+the credential belongs to. See **`docs/ASSET_INTAKE_SETUP.md`** for the
+provisioning procedure; the image Golden Path cannot be reproduced from this
+table alone.
+
 | Secret | Credential source |
 | --- | --- |
 | `GOOGLE_DRIVE_ACCESS_TOKEN` | Static access token (shortest-lived; mainly for verification). |
@@ -65,6 +71,13 @@ credential source.
 
 `GENERATED_ARTIFACT_ORIGIN` and `GENERATED_ARTIFACT_TOKEN` configure the
 generated-artifact intake adapter and are optional.
+
+They are an **implementer extension, not part of the reference Golden Path.**
+The readiness check understands Google Drive only, so a command carrying a
+`generated` reference does not pass the dispatch adapter's gate. The adapter
+itself works at the Worker boundary and is available to an implementer who
+already operates an artifact origin and supplies their own gate. See the
+Google Drive section of `docs/DISPATCH_REFERENCE.md`.
 
 ## GitHub Actions reference adapter
 

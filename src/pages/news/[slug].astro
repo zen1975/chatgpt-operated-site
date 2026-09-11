@@ -1,0 +1,32 @@
+---
+export const prerender = false;
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import ArticleRenderer from '@/components/ArticleRenderer.astro';
+import ShareButtons from '@/components/ShareButtons.astro';
+import TimedContentSlot from '@/components/TimedContentSlot.astro';
+import { getNewsBySlugWithMedia } from '@/lib/content';
+import type { ContentBlockType } from '@/server/core/content-ast';
+
+const { slug } = Astro.params;
+const item = slug ? await getNewsBySlugWithMedia(slug) : null;
+if (!item) return new Response(null, { status: 404 });
+
+const blocks = JSON.parse(item.blocks_json) as ContentBlockType[];
+// seo_title and seo_description hold explicit overrides only, so fall back to
+// the title and excerpt rather than storing a derived copy that would go stale.
+const title = `${item.seo_title || item.title} | Example Company`;
+const description = item.seo_description || item.excerpt || '';
+---
+<BaseLayout title={title} description={description} ogType="article" ogImage={item.media.ogp?.path}>
+  <main>
+    <article class="section"><div class="shell prose">
+      <p class="eyebrow">News</p>
+      <h1>{item.title}</h1>
+      {item.published_at && <p><small>{item.published_at.slice(0,10)}</small></p>}
+      {item.media.hero && <img src={item.media.hero.path} alt="" />}
+      <ArticleRenderer blocks={blocks} />
+      <ShareButtons title={item.title} url={Astro.url.toString()} />
+    </div></article>
+    <TimedContentSlot placement="content_bottom" />
+  </main>
+</BaseLayout>

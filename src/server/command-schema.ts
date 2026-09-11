@@ -82,6 +82,12 @@ export const CreateNewsPayload = z.object({
     .optional(),
   excerpt: z.string().max(160).nullable().optional(),
   blocks: ContentAST,
+  // Associate images at creation time. When this is a separate command, the
+  // second command needs a contentId and an expectedVersion that only exist
+  // after the first one has run, so the most ordinary request there is --
+  // "publish an article with an image" -- cannot complete in one round trip.
+  // Position within a role is assigned from array order.
+  assets: z.array(AssetReference).max(10).default([]),
   contentType: z.enum(['news','article']).default('news'),
   templateProfile: z.string().max(80).default('news-default'),
   categoryTermIds: TaxonomyTermIds,
