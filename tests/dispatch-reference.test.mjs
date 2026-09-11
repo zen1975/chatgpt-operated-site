@@ -8,6 +8,7 @@ import {
   DispatchError,
   normalizeCommandPath,
   providerReference,
+  providerReferences,
   readCommittedCommand,
   runDispatch,
   validateCommand
@@ -123,7 +124,48 @@ test('dispatch binds the receipt and signs the exact body', async () => {
 
 test('provider detection is limited to schemas that own provider references', () => {
   assert.equal(providerReference('replace_asset', { reference: { provider: 'google_drive' } }).provider, 'google_drive');
+  // create_news carries references in `assets`, never in `reference`.
   assert.equal(providerReference('create_news', { reference: { provider: 'google_drive' } }), null);
+  assert.deepEqual(providerReferences('update_content', { assets: [{ provider: 'google_drive' }] }), []);
+});
+
+/**
+ * A command that can introduce a provider asset must be seen by the readiness
+ * gate. create_news accepts an `assets` array, and when that array was not read
+ * here the command reached ingestion without the configured-provider check or
+ * the readiness request, which is the opposite of failing closed.
+ */
+test('every provider reference in an asset array is collected', () => {
+  const payload = { assets: [{ provider: 'google_drive', providerAssetId: 'a' }, { provider: 'generated', providerAssetId: 'b' }] };
+  assert.deepEqual(providerReferences('create_news', payload).map((r) => r.provider), ['google_drive', 'generated']);
+  assert.equal(providerReferences('create_news', {}).length, 0);
+  assert.equal(providerReferences('create_news', { assets: [] }).length, 0);
+});
+
+test('create_news with an unconfigured provider fails before preflight', async () => {
+  const stub = transport();
+  const command = structuredClone(base);
+  command.commandId = 'create-news-unconfigured-provider';
+  command.payload = { ...command.payload, assets: [{ provider: 'generated', providerAssetId: 'artifact-1', intendedRole: 'hero' }] };
+  await assert.rejects(runDispatch(command, options(stub)), { code: 'ASSET_INTAKE_PROVIDER_NOT_CONFIGURED' });
+  assert.equal(stub.calls.length, 0);
+});
+
+test('create_news with the configured provider checks readiness before preflight', async () => {
+  const stub = transport();
+  const command = structuredClone(base);
+  command.commandId = 'create-news-configured-provider';
+  command.payload = { ...command.payload, assets: [{ provider: 'google_drive', providerAssetId: 'drive-file-example', intendedRole: 'hero' }] };
+  await runDispatch(command, options(stub));
+  assert.deepEqual(stub.calls.map((call) => call.url.pathname), [
+    profile.operations.assetIntake.readinessPath,
+    '/api/control/preflight/',
+    '/api/internal/commands/'
+  ]);
+
+  const notReady = transport({ ready: false });
+  await assert.rejects(runDispatch(command, options(notReady)), { code: 'ASSET_INTAKE_NOT_READY' });
+  assert.equal(notReady.calls.length, 1);
 });
 
 test('committed command reader uses the HEAD blob and rejects non-blob entries', async () => {
