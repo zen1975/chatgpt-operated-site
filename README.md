@@ -15,7 +15,15 @@ npm ci
 npm run verify   # build + contract checks
 ```
 
-Then use [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) as the shortest path from this repository to a real client implementation. [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) contains the fuller installation and handoff guidance, and [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) documents the minimal GitHub Actions golden path.
+That proves the baseline on an unmodified clone. To get from there to a live site that publishes an article when you push a file, follow [`docs/QUICK_START.md`](docs/QUICK_START.md) — around thirty minutes, mostly waiting on Cloudflare.
+
+After that: [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) is the shortest path from this repository to a real client implementation, [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) has the fuller installation and handoff guidance, and [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) documents the GitHub Actions dispatch path.
+
+## The operator instructions ship with it
+
+The client talks to ChatGPT. What tells ChatGPT how to behave is [`ai/`](ai/), and it is part of the baseline rather than something each implementer invents.
+
+Correct code with absent or badly placed instructions does not produce a working installation. [`ai/README.md`](ai/README.md) explains the one rule that matters most: whether a rule goes in the pasted setup text or in the repository depends on **when it has to take effect**, not on what it says.
 
 ## What is included
 
@@ -106,6 +114,9 @@ It is also not a hardened control plane. Lease recovery, transactional fencing, 
 - [`docs/IMPLEMENTER_CHECKLIST.md`](docs/IMPLEMENTER_CHECKLIST.md) — shortest path from fork to client implementation
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) — installation and reference-site handoff
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — every binding, variable, and secret the Worker reads
+- [`docs/QUICK_START.md`](docs/QUICK_START.md) — clean clone to a live site that publishes on push
+- [`docs/FORK_AND_UPSTREAM.md`](docs/FORK_AND_UPSTREAM.md) — what a fork may override, and what belongs back here
+- [`ai/README.md`](ai/README.md) — operator instruction templates and where each rule belongs
 - [`docs/ASSET_INTAKE_SETUP.md`](docs/ASSET_INTAKE_SETUP.md) — provisioning the Google Drive intake folder and its credential
 - [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) — intended client operation workflow
 - [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) — minimal, replaceable GitHub Actions dispatch adapter

@@ -11,6 +11,8 @@ npm run verify
 
 Do not redesign the site or add client-specific commands until the baseline passes.
 
+Then build one throwaway installation and publish one article through it, following `docs/QUICK_START.md`. Reading the architecture is not the same as having watched a command reach a rendered page, and the throwaway installation is where you find out which step your environment argues with.
+
 ## 2. Replace installation placeholders
 
 Review and replace the example values in:
@@ -64,6 +66,12 @@ ChatGPT is the operator. Application code owns the rules and reproducibility.
 ## 7. Wire the GitHub-to-Worker dispatch
 
 Use `docs/DISPATCH_REFERENCE.md` as the minimal reference. Replace it when necessary for the installation, but preserve validation and the controlled Worker mutation boundary.
+
+## 7b. Hand the operator its instructions
+
+Copy `ai/OPERATOR_SETUP.md` into the ChatGPT project's instructions with the placeholders filled in, and edit `ai/OPERATION_POLICY.md` for this site.
+
+These are not optional polish. During the first production use of this system the code did not change once, and the operator's behaviour still changed four times purely because of how these were written. `ai/README.md` explains which rule belongs in which file and why they cannot be merged.
 
 ## 8. Verify the real installation
 
