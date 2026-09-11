@@ -119,11 +119,34 @@ Readiness is required only when a command carries a new provider reference. A
 canonical `assetId` already names an ingested asset and does not require Asset
 Intake readiness.
 
-The starter recognizes provider references on the three schemas that currently
-accept them: `replace_asset`, `replace_product_asset`, and
-`replace_page_section_asset`. Their provider must match
-`config/site-profile.json`. When adding another reference-bearing command or
-provider, extend the schema, adapter hook, documentation, and tests together.
+The starter recognizes provider references on four schemas: `replace_asset`,
+`replace_product_asset` and `replace_page_section_asset`, which carry a single
+`reference`, and `create_news`, which carries an `assets` array. Every entry in
+that array is checked. Their provider must match `config/site-profile.json`.
+When adding another reference-bearing command or provider, extend the schema,
+adapter hook, documentation, and tests together.
+
+### Google Drive is the reference Golden Path
+
+Readiness is evaluated by `/api/control/readiness/asset-intake/`, and that
+implementation understands **Google Drive only**. Any other provider named in
+`config/site-profile.json` is answered with
+`ASSET_INTAKE_PROVIDER_UNSUPPORTED`, and a command carrying a reference to a
+provider the profile does not name is refused before preflight with
+`ASSET_INTAKE_PROVIDER_NOT_CONFIGURED`.
+
+So the supported path for images, end to end, is Google Drive. Provision it
+with `docs/ASSET_INTAKE_SETUP.md`.
+
+The `generated` adapter in
+`src/server/adapters/assets/generated-artifact.ts` remains part of the
+repository and works at the Worker boundary, but **it is not supported by the
+reference readiness flow**. It is an extension point for implementers who
+already have an artifact origin and their own gate, not a second Golden Path.
+
+This baseline does not add a readiness implementation for it. One Golden Path
+that is completely provisioned and verified is worth more than two that are
+each partly proven; see the scope rule in `AGENTS.md`.
 
 `context.requiresAssetIntake` remains accepted for compatibility and as useful
 operation metadata, but the dispatch adapter derives readiness from the
