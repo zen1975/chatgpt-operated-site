@@ -93,7 +93,7 @@ The sentence on the left is the whole client-facing interface. Everything below 
   "Publish this as a news post."
        |
        v
-  commands/2026/09/autumn-hours.json      an immutable, signed command
+  commands/2026/09/autumn-hours.json      an immutable command file
        |                                   { "command": "create_news",
        |                                     "payload": { "title": ..., "blocks": [...] } }
        v
@@ -101,12 +101,16 @@ The sentence on the left is the whole client-facing interface. Everything below 
        |
        v
   validate -> reject duplicates -> dry-run -> dispatch -> render
+                                              (the dispatch request
+                                               is HMAC-signed)
        |
        v
   https://example.com/news/autumn-hours/   and state/ now records its version
 ```
 
-There is no admin dashboard, and there is no second way in. Every change that reaches the site went through that path, which is why the site's history is the repository's history.
+The command file itself is immutable once committed; the signature is on the dispatch request that carries it to the Worker, not on the file.
+
+There is no admin dashboard. This is the one canonical operating path for client changes, which is why the site's operating history is the repository's history. Other API ingress exists for implementers and for emergency use, and each is documented in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
 ### Done means three things
 

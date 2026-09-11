@@ -47,9 +47,25 @@ real operation, instructed rules were broken four times and boundaries enforced
 by the application were never broken.
 
 So do not write an instruction for anything whose violation causes real harm.
-Publishing requires the client's approval because the command pipeline requires
-it, not because this file asks for it. If a new rule matters that much, put it
-in the application and leave a note here saying where it lives.
+If a new rule matters that much, put it in the application and leave a note here
+saying where it lives.
+
+Know which of the two you are relying on. **Showing the client a draft and
+waiting for approval is instructed, not enforced.** The default installation has
+no approval field and no approval check: `process-command.yml` dispatches every
+newly pushed command, and a GitHub environment reviewer is optional. An operator
+that ignores the instruction publishes, and nothing stops it.
+
+That is a deliberate position for a baseline, not an oversight, and it is stated
+here so nobody mistakes the instruction for a guarantee. An installation that
+needs approval to be binding has to enforce it -- a required environment
+reviewer on the dispatch job is the smallest version. Until then, do not
+describe it to a client as something the system will not let them skip.
+
+Enforced, by contrast, are the boundaries the application owns: a command that
+fails validation is not applied, a repeated `commandId` applies nothing, a
+version conflict stops the write, and an unauthorized scope is refused before
+any mutation.
 
 ## Language
 

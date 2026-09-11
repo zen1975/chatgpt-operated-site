@@ -29,14 +29,30 @@ Never reconstruct an existing body from the published page. Rendering drops
 things that the stored body keeps, and an update built from the rendered page
 loses them permanently.
 
-## Decide create or update first
+## Decide the object first, then create or update
 
-Adding something new is `create_news`. Changing something that exists is
-`update_content`, and it needs the `contentId` and `expectedVersion` from
-`state/content-index.json`.
+Two questions, in this order. **What kind of thing is being changed**, and
+**does it already exist.**
+
+`src/server/command-schema.ts` is the authority for which command each object
+takes. The rules below cover news and articles only.
+
+| The object | Create | Change |
+| --- | --- | --- |
+| a news item or an article | `create_news` | `update_content` |
+| a page, or a section of a page | `create_page` | `update_page`, `update_page_section`, and the section-item commands |
+| a product | `create_product` | `update_product` |
+
+A request about the homepage, a section, or a product is **not** an
+`update_content`. Sending one either fails validation or targets the wrong
+object. Read the schema for that object instead.
+
+For news and articles: adding something new is `create_news`. Changing
+something that exists is `update_content`, and it needs the `contentId` and
+`expectedVersion` from `state/content-index.json`.
 
 "Change X to Y" is a replacement, not an addition. When the requester names an
-existing page or article, it is an update.
+item that already exists, it is an update.
 
 ## How to report back to the requester
 
@@ -89,6 +105,25 @@ paragraphs" does.>
 <Where images come from for this installation. If Google Drive is configured,
 describe the intake folder and that the operator passes the Drive file id as
 `providerAssetId`. See docs/ASSET_INTAKE_SETUP.md.>
+
+Any command that introduces a new provider-backed image must carry the
+operation metadata that says so:
+
+```json
+"context": {
+  "ruleVersion": "...",
+  "targetSite": "...",
+  "requiresAssetIntake": true
+}
+```
+
+It belongs on `create_news` with an `assets` array just as much as on
+`replace_asset`. The dispatch adapter derives readiness from the reference
+itself and does not depend on this flag, but the flag is the declared contract
+for the operation, and examples are copied.
+
+A command that uses an existing `assetId` rather than a provider reference does
+not need it: nothing new is being taken in.
 
 ## Announcements from the site team
 
