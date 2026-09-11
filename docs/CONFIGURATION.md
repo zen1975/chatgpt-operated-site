@@ -72,6 +72,13 @@ table alone.
 `GENERATED_ARTIFACT_ORIGIN` and `GENERATED_ARTIFACT_TOKEN` configure the
 generated-artifact intake adapter and are optional.
 
+They are an **implementer extension, not part of the reference Golden Path.**
+The readiness check understands Google Drive only, so a command carrying a
+`generated` reference does not pass the dispatch adapter's gate. The adapter
+itself works at the Worker boundary and is available to an implementer who
+already operates an artifact origin and supplies their own gate. See the
+Google Drive section of `docs/DISPATCH_REFERENCE.md`.
+
 ## GitHub Actions reference adapter
 
 The optional reference workflow uses a protected GitHub environment named
