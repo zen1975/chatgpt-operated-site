@@ -85,6 +85,39 @@ A configured client should be able to make ordinary requests such as:
 
 The client should not need to understand the implementation details behind those operations. See [`docs/DAILY_OPERATION.md`](docs/DAILY_OPERATION.md) for the operating model.
 
+### What that actually does
+
+The sentence on the left is the whole client-facing interface. Everything below it is a file in a repository, reviewable and revertable like any other change.
+
+```text
+  "Publish this as a news post."
+       |
+       v
+  commands/2026/09/autumn-hours.json      an immutable, signed command
+       |                                   { "command": "create_news",
+       |                                     "payload": { "title": ..., "blocks": [...] } }
+       v
+  git push
+       |
+       v
+  validate -> reject duplicates -> dry-run -> dispatch -> render
+       |
+       v
+  https://example.com/news/autumn-hours/   and state/ now records its version
+```
+
+There is no admin dashboard, and there is no second way in. Every change that reaches the site went through that path, which is why the site's history is the repository's history.
+
+### Done means three things
+
+```text
+1. The dispatch succeeded
+2. The rendered site shows the requested state
+3. What the operator told the requester matches 1 and 2
+```
+
+The third is not decoration. The operator is the only surface the client sees, so a correct system that reports incorrectly has not delivered anything. This system has produced both failures: a success reported as a failure, and a success reported with a URL that returned 404.
+
 ## Architecture
 
 ```text
@@ -127,9 +160,17 @@ It is also not a hardened control plane. Lease recovery, transactional fencing, 
 
 ## Project status
 
-The **implementer baseline is assembled and continuously verified**. Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
+The baseline has been run, not just assembled.
 
-The repository remains private until the owner chooses to publish it. Making it public does not require proving every possible client deployment first; each real installation should still complete its own provisioning and end-to-end acceptance before client handoff.
+- A real company website was built on it and operated for four days through ChatGPT by someone who does not read code, on both desktop and a phone, for text and for images.
+- Doing that surfaced 35 defects, gaps, and missing documents. All of them are recorded; the ones that blocked a clean-clone reproduction are fixed.
+- The golden path has since been reproduced twice more, on throwaway Cloudflare installations built from clean clones — provision, migrate, deploy, publish an article, publish an article with an image, render, and write the current state back.
+
+Clean installation, build, contract checks, schema/example checks, migration checks, placeholder checks, and tracked-file secret scans run in CI.
+
+What that does **not** mean: that every downstream Cloudflare, Google, or GitHub account is already provisioned. Each real installation still completes its own provisioning and end-to-end acceptance before client handoff. See [`docs/QUICK_START.md`](docs/QUICK_START.md) for what that takes.
+
+The repository remains private until the owner chooses to publish it.
 
 The dispatch adapter in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) is a reference implementation of the golden path, not production acceptance evidence. Hardening it for a live installation is the implementer's work.
 
