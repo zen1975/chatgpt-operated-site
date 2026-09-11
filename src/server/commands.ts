@@ -457,6 +457,10 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
 
     if (cmd.command === 'create_news') {
       const p=CreateNewsPayload.parse(cmd.payload);
+      // Ingesting a provider asset writes to R2 and to the assets table, so it
+      // needs the same scope every other asset-bearing command needs. Without
+      // this, `assets` would let content:write alone reach the asset boundary.
+      if (p.assets.length) authorize(runtime, 'asset:write');
       if (p.startsAt && p.endsAt && p.endsAt <= p.startsAt) throw new CommandError('USER_CORRECTABLE','INVALID_PUBLISH_WINDOW','endsAt must be after startsAt');
       const templateProfile=resolveTemplate(p.templateProfile);
       await validateTaxonomyTerms(p.categoryTermIds,p.tagTermIds);
@@ -468,7 +472,20 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
       // Ingest images before the content row is written. Ingestion writes to R2
       // and to assets, so if the content write then fails, the assets it created
       // are unreferenced and must be compensated.
-      const ingestedAssets:Array<{asset_id:string;role:string;position:number}>=[];
+      // `created` distinguishes an asset this command brought into existence
+      // from one that already existed and was deduplicated by checksum.
+      // Compensation deletes the R2 object and the row, and it protects only
+      // assets referenced from content_assets -- an existing asset referenced
+      // solely by a page or a product would be destroyed. Only roll back what
+      // this command created.
+      const ingestedAssets:Array<{asset_id:string;role:string;position:number;created:boolean}>=[];
+      const rollbackIngestedAssets = async (reason:string) => {
+        for (const association of ingestedAssets) {
+          if (!association.created) continue;
+          try { await compensateUnassociatedAsset(association.asset_id); }
+          catch (compensationError) { throw new CommandError('FATAL_SYSTEM_ERROR','ASSET_COMPENSATION_FAILED',reason,false,{cause:compensationError instanceof Error ? compensationError.message : 'unknown'}); }
+        }
+      };
       try {
         const positions=new Map<string,number>();
         for (const [index,reference] of p.assets.entries()) {
@@ -476,31 +493,28 @@ export async function executeCommand(input:unknown, runtime:CommandRuntime = {})
           const position=positions.get(role) ?? 0;
           positions.set(role,position+1);
           const ingested=await resolveReferenceAsset(reference as ReplaceAssetCommand['reference'], runtime, `${cmd.commandId}:asset:${index}`, role, 'create_news');
-          ingestedAssets.push({asset_id:ingested.assetId,role,position});
+          ingestedAssets.push({asset_id:ingested.assetId,role,position,created:!ingested.reused});
         }
       } catch (error) {
-        for (const association of ingestedAssets) {
-          try { await compensateUnassociatedAsset(association.asset_id); }
-          catch (compensationError) { throw new CommandError('FATAL_SYSTEM_ERROR','ASSET_COMPENSATION_FAILED','Asset ingestion failed and compensation did not complete.',false,{cause:compensationError instanceof Error ? compensationError.message : 'unknown'}); }
-        }
+        await rollbackIngestedAssets('Asset ingestion failed and compensation did not complete.');
         throw error;
       }
       const result={contentType:p.contentType,contentId:id,status,url,templateProfile,assets:ingestedAssets.map((value)=>({assetId:value.asset_id,role:value.role,position:value.position}))};
       const statements=[
         env.DB.prepare(`INSERT INTO news (id,slug,title,excerpt,blocks_json,content_type,status,published_at,starts_at,ends_at,seo_title,seo_description,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,slug,p.title,p.excerpt||null,JSON.stringify(p.blocks),p.contentType,status,publishedAt,p.startsAt||now,p.endsAt||null,seo.seoTitle,seo.seoDescription,1,now,now),
-        contentSearchProjection(id,p.contentType,now),
+        // Before the projection: contentSearchProjection() joins content_assets
+        // to derive the card thumbnail, so an association written afterwards
+        // leaves search_documents.thumbnail permanently null.
         ...ingestedAssets.map((association)=>env.DB.prepare(`INSERT INTO content_assets (content_type,content_id,asset_id,role,position,created_at) VALUES (?,?,?,?,?,?)`).bind(p.contentType,id,association.asset_id,association.role,association.position,now)),
+        contentSearchProjection(id,p.contentType,now),
         ...[...p.categoryTermIds,...p.tagTermIds].map(termId=>env.DB.prepare(`INSERT INTO content_term_links (content_type,content_id,term_id) VALUES (?,?,?)`).bind(p.contentType,id,termId)),
-        env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),p.contentType,id,'create',null,JSON.stringify({...p,id,slug,status,url,templateProfile,seo,taxonomyTermIds:[...p.categoryTermIds,...p.tagTermIds],assetAssociations:ingestedAssets}),cmd.commandId,now),
+        env.DB.prepare(`INSERT INTO content_revisions (id,content_type,content_id,action,before_json,after_json,command_id,created_at) VALUES (?,?,?,?,?,?,?,?)`).bind(uuid(),p.contentType,id,'create',null,JSON.stringify({...p,id,slug,status,url,templateProfile,seo,taxonomyTermIds:[...p.categoryTermIds,...p.tagTermIds],assetAssociations:ingestedAssets.map(({asset_id,role,position})=>({asset_id,role,position}))}),cmd.commandId,now),
         env.DB.prepare(`INSERT INTO jobs (id,command_id,command_type,status,attempt_count,result_json,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET status=excluded.status,result_json=excluded.result_json,finished_at=excluded.finished_at`).bind(uuid(),cmd.commandId,cmd.command,'success',1,JSON.stringify(result),now,now)
       ];
       try {
         await env.DB.batch(statements);
       } catch (error) {
-        for (const association of ingestedAssets) {
-          try { await compensateUnassociatedAsset(association.asset_id); }
-          catch (compensationError) { throw new CommandError('FATAL_SYSTEM_ERROR','ASSET_COMPENSATION_FAILED','Content creation failed and asset compensation did not complete.',false,{cause:compensationError instanceof Error ? compensationError.message : 'unknown'}); }
-        }
+        await rollbackIngestedAssets('Content creation failed and asset compensation did not complete.');
         throw error;
       }
       return {success:true,commandId:cmd.commandId,result};
