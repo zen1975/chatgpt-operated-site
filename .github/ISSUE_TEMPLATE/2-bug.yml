@@ -1,0 +1,44 @@
+name: Bug
+description: Something in the running starter behaves incorrectly.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: One or two sentences. The defect, not the story around it.
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        The smallest sequence that produces it. If a command was involved, paste
+        it with the identifiers replaced — the structure is what matters.
+      render: text
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Error codes, the dispatch response, the rendered page, the Worker log line. Redact credentials and production identifiers.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0, or the commit SHA
+    validations: {required: true}
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have removed credentials, customer content, and production identifiers.
+          required: true
+        - label: This is not a security vulnerability. (Those go through private reporting.)
+          required: true

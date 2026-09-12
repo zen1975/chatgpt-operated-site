@@ -70,7 +70,9 @@ Configure exactly one. The runtime does not merge them.
 1. In the Google Cloud console, select or create a project.
 2. Enable the **Google Drive API** for that project.
 3. Create a **service account**. No project roles are required: Drive access is
-   granted by sharing the folder, not by IAM.
+   granted by sharing the folder, not by IAM. Domain-wide delegation is not
+   required either — the service account should see only the folders explicitly
+   shared with it.
 4. Create a **JSON key** for that service account and download it.
 5. From the JSON, take `client_email` and `private_key`.
 

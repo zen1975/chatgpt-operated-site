@@ -1,0 +1,35 @@
+name: Feature request
+description: Something the starter cannot do that you needed it to do.
+labels: [feature request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **How these are handled.** New capability follows repeated real use. A
+        request that appears once is recorded, not built. That is deliberate:
+        it keeps the one operating path narrow enough to stay correct.
+
+        So the useful part of this form is not the proposed feature — it is what
+        you were actually trying to do when you hit the wall.
+  - type: textarea
+    id: situation
+    attributes:
+      label: What were you trying to do
+      description: The real task, in the terms the person asking for it would use.
+    validations: {required: true}
+  - type: textarea
+    id: blocked
+    attributes:
+      label: What stopped you
+      description: What you tried, and where it ran out. Include the command or the error if there was one.
+    validations: {required: true}
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you did instead
+      description: If you worked around it, how? A workaround that is good enough is useful information.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you think should exist
+      description: Optional.

@@ -1,0 +1,23 @@
+name: Documentation problem
+description: A document is wrong, out of date, or missing something it needs.
+labels: [documentation]
+body:
+  - type: input
+    id: file
+    attributes:
+      label: Which document
+      placeholder: docs/CONFIGURATION.md
+    validations: {required: true}
+  - type: textarea
+    id: problem
+    attributes:
+      label: What it says, and why that is wrong
+      description: |
+        Quote the passage. If the document disagrees with the code, the code is
+        the authority — say which part of the code you checked.
+    validations: {required: true}
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What it should say
+      description: Optional, but the fastest route to a fix.
