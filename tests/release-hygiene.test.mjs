@@ -43,8 +43,15 @@ const SELF_REFERENTIAL = new Set(['tests/release-hygiene.test.mjs', 'scripts/dis
 // The slug is what is matched, not the full URL, so that `owner/repo#123` --
 // GitHub's own cross-repository reference, and how a fork records the upstream
 // pull request a change came from -- is permitted alongside the https form.
+//
+// The public roadmap is the second permitted context. GitHub Projects live in
+// the owner's namespace rather than the repository's, and a repository-relative
+// link does not reach them: the repository's Projects tab lists classic
+// repository projects, and a linked Project does not appear there. So a
+// distribution that may not write this path cannot link to its own roadmap.
 const CANONICAL_OWNER = 'zen1975';
 const CANONICAL_SLUG = `${CANONICAL_OWNER}/sitewright`;
+const CANONICAL_PROJECTS = `users/${CANONICAL_OWNER}/projects/`;
 
 // Values, not just filenames, are the risk here: this suite reports the file
 // and the pattern class only, never the matched text.
@@ -93,8 +100,8 @@ test('no tracked file carries private-upstream or operator identifiers', async (
     for (const marker of markers) {
       if (marker.test(content)) findings.push(`${file}: ${marker}`);
     }
-    const stray = content.replaceAll(CANONICAL_SLUG, '');
-    if (new RegExp(`\\b${CANONICAL_OWNER}\\b`).test(stray)) findings.push(`${file}: ${CANONICAL_OWNER} outside \`${CANONICAL_SLUG}\``);
+    const stray = content.replaceAll(CANONICAL_SLUG, '').replaceAll(CANONICAL_PROJECTS, '');
+    if (new RegExp(`\\b${CANONICAL_OWNER}\\b`).test(stray)) findings.push(`${file}: ${CANONICAL_OWNER} outside \`${CANONICAL_SLUG}\` and \`${CANONICAL_PROJECTS}\``);
   }
   assert.deepEqual(findings, [], `private-upstream markers found:\n${findings.join('\n')}`);
 });
