@@ -39,8 +39,12 @@ const SELF_REFERENTIAL = new Set(['tests/release-hygiene.test.mjs', 'scripts/dis
 
 // The one repository this distribution is allowed to name: its own canonical
 // home. A fork keeps this value, because a fork still pulls from here.
+//
+// The slug is what is matched, not the full URL, so that `owner/repo#123` --
+// GitHub's own cross-repository reference, and how a fork records the upstream
+// pull request a change came from -- is permitted alongside the https form.
 const CANONICAL_OWNER = 'zen1975';
-const CANONICAL_REPOSITORY = `https://github.com/${CANONICAL_OWNER}/sitewright`;
+const CANONICAL_SLUG = `${CANONICAL_OWNER}/sitewright`;
 
 // Values, not just filenames, are the risk here: this suite reports the file
 // and the pattern class only, never the matched text.
@@ -77,9 +81,9 @@ test('no tracked file contains credential material', async () => {
 // tracker, its security advisories, or the upstream a fork pulls from -- which
 // is how the rule started failing legitimate work.
 //
-// So the handle is permitted only inside the canonical repository URL. A bare
-// mention, a local path, or a link to some other repository owned by the same
-// account still fails, which is the part that was actually protective.
+// So the handle is permitted only as part of the canonical repository slug. A
+// bare mention, a local path, or a reference to some other repository owned by
+// the same account still fails, which is the part that was actually protective.
 test('no tracked file carries private-upstream or operator identifiers', async () => {
   const markers = [/\bhack-sub\b/, /corporate-ai-site-starter/, /\bupnext-site\b/, /\/Users\//];
   const findings = [];
@@ -89,8 +93,8 @@ test('no tracked file carries private-upstream or operator identifiers', async (
     for (const marker of markers) {
       if (marker.test(content)) findings.push(`${file}: ${marker}`);
     }
-    const stray = content.replace(new RegExp(CANONICAL_REPOSITORY.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '');
-    if (new RegExp(`\\b${CANONICAL_OWNER}\\b`).test(stray)) findings.push(`${file}: ${CANONICAL_OWNER} outside the canonical repository URL`);
+    const stray = content.replaceAll(CANONICAL_SLUG, '');
+    if (new RegExp(`\\b${CANONICAL_OWNER}\\b`).test(stray)) findings.push(`${file}: ${CANONICAL_OWNER} outside \`${CANONICAL_SLUG}\``);
   }
   assert.deepEqual(findings, [], `private-upstream markers found:\n${findings.join('\n')}`);
 });
