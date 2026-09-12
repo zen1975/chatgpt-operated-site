@@ -37,6 +37,11 @@ test('.gitignore excludes local secret material', async () => {
 // These files name the markers on purpose, so they cannot be scanned for them.
 const SELF_REFERENTIAL = new Set(['tests/release-hygiene.test.mjs', 'scripts/distribution-files.mjs']);
 
+// The one repository this distribution is allowed to name: its own canonical
+// home. A fork keeps this value, because a fork still pulls from here.
+const CANONICAL_OWNER = 'zen1975';
+const CANONICAL_REPOSITORY = `https://github.com/${CANONICAL_OWNER}/sitewright`;
+
 // Values, not just filenames, are the risk here: this suite reports the file
 // and the pattern class only, never the matched text.
 const SECRET_PATTERNS = [
@@ -61,11 +66,22 @@ test('no tracked file contains credential material', async () => {
   assert.deepEqual(findings, [], `credential-shaped content found:\n${findings.join('\n')}`);
 });
 
-// The distribution claims to be a neutral English starter extracted from a
-// private upstream. Residual identifiers from that upstream are how private
-// context leaks into a public repository.
+// The distribution was extracted from a private upstream, and residual
+// identifiers from that upstream are how private context leaks into a public
+// repository.
+//
+// The owner handle is the exception, and it is a deliberate one. This rule was
+// written while the upstream was private, where the handle was itself the
+// thing being protected. The repository is now public at CANONICAL_REPOSITORY,
+// and a distribution that may not name its own home cannot link to its issue
+// tracker, its security advisories, or the upstream a fork pulls from -- which
+// is how the rule started failing legitimate work.
+//
+// So the handle is permitted only inside the canonical repository URL. A bare
+// mention, a local path, or a link to some other repository owned by the same
+// account still fails, which is the part that was actually protective.
 test('no tracked file carries private-upstream or operator identifiers', async () => {
-  const markers = [/\bhack-sub\b/, /\bzen1975\b/, /corporate-ai-site-starter/, /\bupnext-site\b/, /\/Users\//];
+  const markers = [/\bhack-sub\b/, /corporate-ai-site-starter/, /\bupnext-site\b/, /\/Users\//];
   const findings = [];
   for (const file of textFiles) {
     if (SELF_REFERENTIAL.has(file)) continue;
@@ -73,6 +89,8 @@ test('no tracked file carries private-upstream or operator identifiers', async (
     for (const marker of markers) {
       if (marker.test(content)) findings.push(`${file}: ${marker}`);
     }
+    const stray = content.replace(new RegExp(CANONICAL_REPOSITORY.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '');
+    if (new RegExp(`\\b${CANONICAL_OWNER}\\b`).test(stray)) findings.push(`${file}: ${CANONICAL_OWNER} outside the canonical repository URL`);
   }
   assert.deepEqual(findings, [], `private-upstream markers found:\n${findings.join('\n')}`);
 });
