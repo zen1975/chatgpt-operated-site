@@ -1,0 +1,37 @@
+---
+export const prerender = false;
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import PageCompositionRenderer from '@/components/PageCompositionRenderer.astro';
+import TimedContentSlot from '@/components/TimedContentSlot.astro';
+import { loadPageCompositionBySlug } from '@/server/page-composition/renderer';
+import siteProfile from '../../config/site-profile.json';
+
+/**
+ * Render a page built from page sections.
+ *
+ * The page-composition commands (create_page, insert_page_section,
+ * update_page_section, reorder_page_sections, replace_page_section_asset) write
+ * to `pages` and `page_sections`, and `loadPageCompositionBySlug()` reads them
+ * back. Without this route none of that is visible: the command succeeds, the
+ * page is stored, `state/page-index.json` lists it, and every URL an operator
+ * reports is a 404.
+ *
+ * This is the catch-all route, so it must come after the fixed routes Astro
+ * already matches more specifically (`/news/…`, `/column/…`, `/api/…`).
+ */
+const slugParam = Astro.params.slug;
+const slug = Array.isArray(slugParam) ? slugParam.join('/') : (slugParam ?? '');
+if (!slug) return new Response(null, { status: 404 });
+
+const composition = await loadPageCompositionBySlug(slug);
+if (!composition) return new Response(null, { status: 404 });
+
+// seoTitle and seoDescription hold explicit overrides only, so fall back to the
+// page title rather than reading a derived copy that would go stale.
+const title = composition.page.seoTitle || `${composition.page.title} | ${siteProfile.site.id}`;
+const description = composition.page.seoDescription || '';
+---
+<BaseLayout title={title} description={description}>
+  <Fragment slot="global-top"><TimedContentSlot placement="global_top" /></Fragment>
+  <PageCompositionRenderer composition={composition} />
+</BaseLayout>

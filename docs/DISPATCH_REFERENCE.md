@@ -59,11 +59,17 @@ publish:
 ```text
 /news/            /news/<slug>/       content_type 'news'
 /column/          /column/<slug>/     content_type 'article'
+/<slug>/                              pages built from page sections
 ```
 
 They match `config/permalink-profile.json`, which is also what
 `resolvePermalink()` returns and what a command reports back as its `url`. If a
 fork changes the permalink profile, these routes move with it.
+
+The last one is a catch-all and resolves a page by its slug, so the
+page-composition commands (`create_page`, `insert_page_section`,
+`update_page_section`, `reorder_page_sections`,
+`replace_page_section_asset`) have somewhere to appear.
 
 A command that succeeds but has nowhere to render is not a completed operation:
 dispatch reports success, the URL in the report returns 404, and the requester
