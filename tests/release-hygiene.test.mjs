@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { repoRoot } from '../scripts/load-command-contracts.mjs';
 import { distributionFiles, assertUsableManifest } from '../scripts/distribution-files.mjs';
@@ -182,4 +182,49 @@ test('.dockerignore excludes local dependencies and secret material', async () =
   for (const kept of ['examples', 'schemas', 'config', 'migrations', 'tests', 'scripts', 'src', 'docs', 'package.json', 'package-lock.json']) {
     assert.ok(!patterns.includes(kept), `.dockerignore must not exclude ${kept}: the image runs the contract checks against it`);
   }
+});
+
+/**
+ * A stylesheet that names a token nothing defines fails silently: the browser
+ * drops the declaration and renders whatever was underneath. That is how a
+ * composed page shipped white text on a transparent background, visible to
+ * anyone who rendered one and to no test.
+ */
+test('every CSS custom property used is also defined', async () => {
+  const sheets = (await readdir('src/styles')).filter((f) => f.endsWith('.css'));
+  const defined = new Set();
+  const used = new Map();
+  for (const sheet of sheets) {
+    const css = await readFile(path.join(repoRoot, 'src/styles', sheet), 'utf8');
+    for (const m of css.matchAll(/(^|[;{\s])(--[a-z0-9-]+)\s*:/gi)) defined.add(m[2]);
+    for (const m of css.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {
+      if (!used.has(m[1])) used.set(m[1], sheet);
+    }
+  }
+  const missing = [...used.entries()].filter(([name]) => !defined.has(name));
+  assert.deepEqual(missing.map(([n, f]) => `${f}: ${n}`), [],
+    'CSS custom properties used but never defined');
+});
+
+/**
+ * A font the distribution never loads is not a style choice, it is a leftover
+ * from whatever theme the file was cut out of. It falls back silently and the
+ * page renders in something else.
+ */
+test('stylesheets only name font families the distribution can actually use', async () => {
+  const generic = new Set(['inherit', 'initial', 'unset', 'sans-serif', 'serif', 'monospace',
+    'system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace', 'ui-rounded', '-apple-system',
+    'blinkmacsystemfont', 'segoe ui', 'helvetica', 'arial', 'georgia', 'menlo', 'monaco',
+    'sfmono-regular', 'consolas', 'liberation mono', 'courier new', 'inter']);
+  const sheets = (await readdir('src/styles')).filter((f) => f.endsWith('.css'));
+  const findings = [];
+  for (const sheet of sheets) {
+    const css = await readFile(path.join(repoRoot, 'src/styles', sheet), 'utf8');
+    const loaded = /@font-face|fonts\.googleapis\.com/.test(css);
+    for (const m of css.matchAll(/"([^"]+)"/g)) {
+      const family = m[1].trim().toLowerCase();
+      if (!generic.has(family) && !loaded) findings.push(`${sheet}: "${m[1]}" is named but never loaded`);
+    }
+  }
+  assert.deepEqual(findings, [], findings.join('\n'));
 });

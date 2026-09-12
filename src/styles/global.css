@@ -7,6 +7,15 @@
   --muted: #666;
   --accent: #1f5eff;
   --shell: 1120px;
+
+  /* Consumed by page-composition.css and asset-renderer.css. They used to name
+     tokens this file never defined, so a composed page rendered white text on a
+     transparent background — invisible, with no error anywhere. */
+  --text: #171717;
+  --text-secondary: #666;
+  --primary-dark: #171717;
+  --line: #dedede;
+  --cream: #f5f5f5;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }

@@ -2,8 +2,8 @@
 .page-module { padding: 72px 0; }
 .page-module__inner { width: min(var(--shell), calc(100% - 48px)); margin-inline: auto; }
 .page-module h1, .page-module h2, .page-module h3 { color: inherit; }
-.page-module h1 { max-width: 18ch; margin: 0; font: 500 clamp(2.5rem, 6vw, 5rem)/1.15 "Zen Old Mincho", Georgia, serif; }
-.page-module h2 { margin: 0 0 28px; font: 500 clamp(1.75rem, 4vw, 3rem)/1.3 "Zen Old Mincho", Georgia, serif; }
+.page-module h1 { max-width: 18ch; margin: 0; font: 700 clamp(2.5rem, 6vw, 4.5rem)/1.08 inherit; letter-spacing: -.04em; }
+.page-module h2 { margin: 0 0 28px; font: 700 clamp(1.75rem, 4vw, 2.5rem)/1.2 inherit; letter-spacing: -.02em; }
 .page-module h3 { margin: 0 0 10px; font-size: 1.1rem; line-height: 1.5; }
 .page-module p { line-height: 1.8; }
 .page-module--hero { background: var(--primary-dark); color: #fff; }
@@ -24,7 +24,7 @@
 .page-module__card img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
 .page-module--stats .page-module__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .page-module__stats > div { padding: 20px 0; border-top: 1px solid var(--border); }
-.page-module__stats strong { display: block; font: 500 2.5rem/1.2 "Zen Old Mincho", Georgia, serif; }
+.page-module__stats strong { display: block; font: 700 2.5rem/1.2 inherit; letter-spacing: -.03em; }
 .page-module__stats h3 { margin-top: 8px; }
 .page-module--faq dl { margin: 0; border-top: 1px solid var(--border); }
 .page-module--faq dt, .page-module--faq dd { padding: 18px 0; border-bottom: 1px solid var(--border); }
