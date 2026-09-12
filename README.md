@@ -1,14 +1,28 @@
-# ChatGPT Operated Site
+# Sitewright
 
 > **Build websites your clients can update from ChatGPT.**
 
-> ChatGPT interprets intent. Infrastructure enforces boundaries. The AI is not the authority.
+> The assistant interprets intent. Infrastructure enforces boundaries. The AI is not the authority.
 
-ChatGPT Operated Site is an open-source website operations starter for agencies, developers, freelancers, and teams building client websites.
+Sitewright is an open-source website operations starter for agencies, developers, freelancers, and teams building client websites.
 
 The repository includes a simple English Astro corporate website together with the controlled operation layer underneath it. The included website is intentionally similar in spirit to a clean starter theme: it demonstrates the system without prescribing a client's brand or design.
 
-**The client uses ChatGPT. The agency owns everything underneath.**
+**The client uses a chat assistant. The agency owns everything underneath.**
+
+### Which assistants can operate a site
+
+The operator is whatever can commit a file to a GitHub repository. That is a real requirement, not a formality — not every assistant can do it today.
+
+| | |
+| --- | --- |
+| **ChatGPT** | Verified. A real company's site was operated this way for four days. |
+| **Grok** | Being checked. |
+| **Claude** | Its chat interface cannot connect to GitHub today. Claude Code can, but that is a developer tool rather than something a client uses. |
+
+This table states what has been run, not what is planned. It changes when something is verified, not before.
+
+Sitewright is an independent open-source project. It is not affiliated with, endorsed by, or certified by OpenAI, xAI, Anthropic, or Google. ChatGPT, Grok, Claude, and Gemini are trademarks of their respective owners, referenced here only to describe which assistants can operate a site.
 
 ## Quick start
 
@@ -44,7 +58,7 @@ A developer can replace its design with a client's site while keeping the operat
 
 ## Operate any part of your site
 
-ChatGPT Operated Site is **not limited to news posts, articles, or the components included in the starter**.
+Sitewright is **not limited to news posts, articles, or the components included in the starter**.
 
 Developers can expose virtually any appropriate part of their website as a controlled operation, including:
 

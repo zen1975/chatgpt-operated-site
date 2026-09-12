@@ -1,8 +1,8 @@
 # Reproduces the supported clean-environment install for third parties who do
 # not want to match the pinned Node/npm versions on their host.
 #
-#   docker build -t chatgpt-operated-site .
-#   docker run --rm chatgpt-operated-site
+#   docker build -t sitewright .
+#   docker run --rm sitewright
 #
 # `.dockerignore` keeps local dependencies and secret material out of the build
 # context, and excludes `.git`. The image therefore carries neither git metadata

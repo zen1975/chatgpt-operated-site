@@ -26,8 +26,8 @@ rather not match those on your host, the container reproduces the supported
 environment and runs the same verification:
 
 ```bash
-docker build -t chatgpt-operated-site .
-docker run --rm chatgpt-operated-site
+docker build -t sitewright .
+docker run --rm sitewright
 ```
 
 The image carries no git metadata, so this also exercises the contract checks

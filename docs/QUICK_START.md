@@ -40,7 +40,7 @@ Replace in `wrangler.jsonc`:
 
 | Placeholder | Value |
 | --- | --- |
-| `replace-me-chatgpt-operated-site` | the Worker name |
+| `replace-me-sitewright` | the Worker name |
 | `replace-me-content` / `database_id` | the D1 name and the printed uuid |
 | `replace-me-assets` | the R2 bucket name |
 | the zeroed KV `id` | the printed namespace id |
