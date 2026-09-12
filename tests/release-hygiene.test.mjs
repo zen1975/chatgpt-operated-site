@@ -228,3 +228,28 @@ test('stylesheets only name font families the distribution can actually use', as
   }
   assert.deepEqual(findings, [], findings.join('\n'));
 });
+
+/**
+ * `font: 700 2rem/1.2 inherit` is invalid: the shorthand needs a real family,
+ * and `inherit` is only legal as the whole value. A browser discards the entire
+ * declaration, so the text silently falls back to the user agent's size and
+ * weight. Nothing in a build or a type check notices.
+ */
+test('no CSS font shorthand uses a keyword where a family belongs', async () => {
+  const keywords = ['inherit', 'initial', 'unset', 'revert'];
+  const sheets = (await readdir('src/styles')).filter((f) => f.endsWith('.css'));
+  const findings = [];
+  for (const sheet of sheets) {
+    const css = await readFile(path.join(repoRoot, 'src/styles', sheet), 'utf8');
+    for (const m of css.matchAll(/(^|[;{\s])font\s*:\s*([^;}]+)/gi)) {
+      const value = m[2].trim();
+      // The family sits at the end of the shorthand. Take the final token of the
+      // final comma-separated entry, not the whole entry.
+      const last = value.split(',').pop().trim().split(/\s+/).pop().toLowerCase();
+      if (keywords.includes(last) && value.split(/\s+/).length > 1) {
+        findings.push(`${sheet}: font: ${value}`);
+      }
+    }
+  }
+  assert.deepEqual(findings, [], findings.join('\n'));
+});
