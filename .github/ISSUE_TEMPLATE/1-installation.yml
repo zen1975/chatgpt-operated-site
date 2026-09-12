@@ -1,0 +1,42 @@
+name: Installation problem
+description: A step in QUICK_START or the setup documents did not work.
+labels: [installation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Installation is the path this project cares about most: a clean clone
+        should reach a live post without a maintainer in the room. If it did
+        not, that is a defect in the starter, not a mistake you made.
+  - type: input
+    id: step
+    attributes:
+      label: Which step
+      description: The document and the step number you were on.
+      placeholder: docs/QUICK_START.md, step 4
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Include the exact command and the exact output. Redact any credential, account id, or hostname.
+    validations: {required: true}
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - node -v:
+        - npm -v:
+        - wrangler --version:
+        - OS:
+    validations: {required: true}
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is a clean clone, not a fork carrying my own changes.
+          required: true
+        - label: I have removed credentials, account ids, and production hostnames from everything pasted above.
+          required: true
