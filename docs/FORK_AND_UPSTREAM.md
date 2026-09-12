@@ -5,7 +5,7 @@ what moves back, the two copies drift until the fork becomes a second,
 undocumented implementation.
 
 ```text
-chatgpt-operated-site        canonical, English, public
+sitewright                   canonical, English, public
   ├── fork: demo site        generic content, where new work is proven
   └── fork: client project   one private fork per client
 ```
