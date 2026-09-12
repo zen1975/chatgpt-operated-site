@@ -253,3 +253,19 @@ test('no CSS font shorthand uses a keyword where a family belongs', async () => 
   }
   assert.deepEqual(findings, [], findings.join('\n'));
 });
+
+/**
+ * A page section that renders without an `id` cannot be linked to. The command
+ * author chooses the section id, so in-page navigation (`/#roadmap`) is only
+ * possible if the renderer puts that id on the element. Every module type needs
+ * it, not just the ones that happen to carry one for accessibility.
+ */
+test('every page module section element renders an id', async () => {
+  const file = 'src/components/page-modules/TrustedPageModule.astro';
+  const source = await readFile(path.join(repoRoot, file), 'utf8');
+  const findings = [];
+  for (const m of source.matchAll(/<section\b[^>]*>/g)) {
+    if (!/\sid=\{section\.id\}/.test(m[0])) findings.push(`${file}: ${m[0].slice(0, 80)}`);
+  }
+  assert.deepEqual(findings, [], findings.join('\n'));
+});
