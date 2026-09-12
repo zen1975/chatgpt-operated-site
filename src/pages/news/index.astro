@@ -1,11 +1,12 @@
 ---
+import siteProfile from '../../../config/site-profile.json';
 export const prerender = false;
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import ContentCard from '@/components/ContentCard.astro';
 import { getNewsWithMedia } from '@/lib/content';
 const news = await getNewsWithMedia(50);
 ---
-<BaseLayout title="News | Example Company" description="Updates published through the controlled operation layer.">
+<BaseLayout title={`News | ${siteProfile.site.name}`} description="Updates published through the controlled operation layer.">
   <main>
     <section class="page-hero"><div class="shell"><p class="eyebrow">Updates</p><h1>News</h1><p>Everything published as a news item appears here, newest first.</p></div></section>
     <section class="section"><div class="shell"><div class="card-grid">

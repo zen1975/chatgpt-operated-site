@@ -1,4 +1,5 @@
 ---
+import siteProfile from '../../../config/site-profile.json';
 export const prerender = false;
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import ArticleRenderer from '@/components/ArticleRenderer.astro';
@@ -12,7 +13,7 @@ const item = slug ? await getArticleBySlugWithMedia(slug) : null;
 if (!item) return new Response(null, { status: 404 });
 
 const blocks = JSON.parse(item.blocks_json) as ContentBlockType[];
-const title = `${item.seo_title || item.title} | Example Company`;
+const title = `${item.seo_title || item.title} | ${siteProfile.site.name}`;
 const description = item.seo_description || item.excerpt || '';
 ---
 <BaseLayout title={title} description={description} ogType="article" ogImage={item.media.ogp?.path}>

@@ -28,7 +28,7 @@ if (!composition) return new Response(null, { status: 404 });
 
 // seoTitle and seoDescription hold explicit overrides only, so fall back to the
 // page title rather than reading a derived copy that would go stale.
-const title = composition.page.seoTitle || `${composition.page.title} | ${siteProfile.site.id}`;
+const title = composition.page.seoTitle || `${composition.page.title} | ${siteProfile.site.name}`;
 const description = composition.page.seoDescription || '';
 ---
 <BaseLayout title={title} description={description}>

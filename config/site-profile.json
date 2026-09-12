@@ -1,6 +1,7 @@
 {
   "site": {
     "id": "example-site",
+    "name": "Example Company",
     "type": "corporate",
     "timezone": "UTC",
     "origin": "https://example.com"
@@ -15,12 +16,29 @@
       "note": "The client uses ChatGPT. Asset Intake is infrastructure configured by the installer. GitHub Actions owns authenticated readiness checks."
     }
   },
-  "contentTypes": ["news", "article", "faq", "campaign"],
-  "dynamicSlots": ["global_top", "header_after", "top_hero_after", "top_news_before", "top_news_after", "content_bottom", "article_bottom", "footer_before"],
+  "contentTypes": [
+    "news",
+    "article",
+    "faq",
+    "campaign"
+  ],
+  "dynamicSlots": [
+    "global_top",
+    "header_after",
+    "top_hero_after",
+    "top_news_before",
+    "top_news_after",
+    "content_bottom",
+    "article_bottom",
+    "footer_before"
+  ],
   "editorialProfile": "corporate-v1",
   "permalinkProfile": "corporate-default",
   "seoProfile": "default-seo-v1",
-  "templateProfiles": ["news-default", "article-professional"],
+  "templateProfiles": [
+    "news-default",
+    "article-professional"
+  ],
   "designProfile": "starter-neutral-v1",
   "defaultOgImage": "/assets/default-og.svg"
 }

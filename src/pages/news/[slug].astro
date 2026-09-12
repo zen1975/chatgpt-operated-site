@@ -1,4 +1,5 @@
 ---
+import siteProfile from '../../../config/site-profile.json';
 export const prerender = false;
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import ArticleRenderer from '@/components/ArticleRenderer.astro';
@@ -14,7 +15,7 @@ if (!item) return new Response(null, { status: 404 });
 const blocks = JSON.parse(item.blocks_json) as ContentBlockType[];
 // seo_title and seo_description hold explicit overrides only, so fall back to
 // the title and excerpt rather than storing a derived copy that would go stale.
-const title = `${item.seo_title || item.title} | Example Company`;
+const title = `${item.seo_title || item.title} | ${siteProfile.site.name}`;
 const description = item.seo_description || item.excerpt || '';
 ---
 <BaseLayout title={title} description={description} ogType="article" ogImage={item.media.ogp?.path}>

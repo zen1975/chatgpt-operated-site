@@ -291,3 +291,27 @@ test('every page module section element renders an id', async () => {
   }
   assert.deepEqual(findings, [], findings.join('\n'));
 });
+
+/**
+ * The mock pages (`about`, `contact`, `services`, the reference `index`, the
+ * header and footer) are reference content: a fork replaces them, and they say
+ * so on the page. The content routes are not. A fork keeps `news/` and
+ * `column/` because that is where its operator publishes, so a company name
+ * hardcoded there ships the reference site's identity in a real site's
+ * `<title>`. It is read from `site.name` instead.
+ */
+test('content routes do not hardcode the reference site name', async () => {
+  const routes = [
+    'src/pages/news/index.astro', 'src/pages/news/[slug].astro',
+    'src/pages/column/index.astro', 'src/pages/column/[slug].astro',
+    'src/pages/[...slug].astro'
+  ];
+  const profile = JSON.parse(await readFile(path.join(repoRoot, 'config/site-profile.json'), 'utf8'));
+  assert.ok(profile.site.name, 'config/site-profile.json must carry site.name');
+  const findings = [];
+  for (const route of routes) {
+    const source = await readFile(path.join(repoRoot, route), 'utf8');
+    if (source.includes(profile.site.name)) findings.push(`${route}: hardcodes "${profile.site.name}"`);
+  }
+  assert.deepEqual(findings, [], findings.join('\n'));
+});
