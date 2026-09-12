@@ -1,3 +1,4 @@
+import { withSectionInserted } from './ordering';
 import { env } from 'cloudflare:workers';
 import { CommandError } from '../core/errors';
 import { uuid } from '../util';
@@ -412,7 +413,7 @@ export async function executePageCommand(command: string, input: unknown, comman
     const position = Math.min(payload.position, current.length);
     const now = new Date().toISOString(), inserted = { id, pageId: page.id, sectionType: payload.sectionType as ModuleType, position, variant: payload.variant, props: payload.props, status: 'published' as const, version: 1, createdAt: now, updatedAt: now };
     await assertSectionAssets(inserted.sectionType, inserted.props);
-    const sections = [...current.map((section) => ({ ...section })), inserted].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id)).map((section, index) => ({ ...section, position: index }));
+    const sections = withSectionInserted(current, inserted, position);
     const before = snapshot(page, current), nextVersion = page.version + 1, after = snapshot({ ...page, version: nextVersion, updated_at: now }, sections, nextVersion), result = { pageId: page.id, sectionId: id, version: nextVersion, action: 'insert_page_section' };
     const statements: unknown[] = [pageUpdateStatement(page, payload.expectedVersion, '', [], nextVersion, now), ...positionStatements(page.id, sections), env.DB.prepare('INSERT INTO page_sections (id,page_id,section_type,position,variant,props_json,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id, page.id, inserted.sectionType, position, inserted.variant, JSON.stringify(inserted.props), inserted.status, 1, now, now)];
     return commitPageMutation(commandId, command, page, payload.expectedVersion, 'insert_page_section', before, after, statements, result);
