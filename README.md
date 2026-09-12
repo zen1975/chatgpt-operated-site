@@ -194,6 +194,23 @@ The repository is public and available under the MIT License.
 
 The dispatch adapter in [`docs/DISPATCH_REFERENCE.md`](docs/DISPATCH_REFERENCE.md) is a reference implementation of the golden path, not production acceptance evidence. Hardening it for a live installation is the implementer's work.
 
+## Roadmap
+
+[**Public Roadmap**](https://github.com/users/zen1975/projects/3) — what is being considered, and how sure we are about each item.
+
+The columns are evidence gates, not a schedule. Nothing on it has a date.
+
+| | |
+|---|---|
+| **Exploring** | No design, no timeline. Listening for whether this is a real problem. |
+| **Validating** | A hypothesis with some evidence behind it. Still not being built. |
+| **In Progress** | Being built now. |
+| **Shipped** | Released and in use. |
+
+New capability follows repeated real use: a request that appears once is recorded, not built. That is deliberate, because one operating path only stays correct while it stays narrow.
+
+Every item says plainly what evidence exists — including "nobody has asked for this yet", where that is the truth. **Telling us an item is not your problem is as useful as a 👍.**
+
 ## Licence
 
 [MIT](LICENSE).
